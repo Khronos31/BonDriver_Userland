@@ -1,0 +1,44 @@
+Provenance and licensing notice
+================================
+
+This repository (BonDriver_Userland) contains newly written C++17 source,
+build files and tests for shared libraries that drive the siano-userland and
+px4-userland command line tools. It does not bundle any third-party source
+files or headers.
+
+ABI compatibility and adapters
+------------------------------
+The public interface and the EDCB structure layouts in
+include/bondriver/Abi.h exist so that existing BonDriver consumers (EDCB and
+LibISDB) can load these libraries. Vtable order and structure layout are
+functional compatibility requirements; equivalent declarations are also used
+independently by consumers. The C-structure adapter functions that fill and
+forward the structure slots are implemented in this project
+(src/common/DriverCore.cpp); the EDCB inline adapter bodies are not copied.
+
+The optional test tests/edcb_compile_check.cpp compiles against an EDCB
+checkout supplied by the operator at configure time. EDCB and LibISDB are not
+redistributed here.
+
+Consulted references (read only)
+--------------------------------
+- EDCB BonDriver interface declarations (BonCtrl/IBonDriver.h, IBonDriver2.h)
+  were inspected to validate the ABI: https://github.com/Khronos31/EDCB
+- LibISDB BonDriver interface declarations
+  (LibISDB/Windows/Base/BonDriver.hpp) were inspected to validate the ABI and
+  to confirm that consumers use the pointer form of GetTsStream.
+- BonDriver reference implementations in the Khronos31/hassio-addons EDCB
+  add-on (https://github.com/Khronos31/hassio-addons) and in
+  Khronos31/Pochitto (https://github.com/Khronos31/Pochitto) were consulted
+  for tuning and behavioral knowledge; their code is not included.
+- Child CLI contracts (option names, units, channel frequency formulas) are
+  taken from the siano-userland (https://github.com/Khronos31/siano-userland)
+  and px4-userland (https://github.com/Khronos31/px4-userland) documentation.
+
+Names of third-party projects and their trademarks belong to their respective
+owners.
+
+Licensing status
+----------------
+No license is granted for this repository yet. A license must be chosen and
+recorded by the project owner before publication or redistribution.

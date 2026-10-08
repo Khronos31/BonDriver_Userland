@@ -1,0 +1,41 @@
+; BonDriver_Siano sample configuration.
+; Copy to the directory containing BonDriver_Siano.so/.dll/.dylib and rename it
+; to BonDriver_Siano.ini.  Relative paths resolve against this file's directory.
+
+[common]
+; Display name returned by GetTunerName (UTF-8).
+tuner_name = Siano
+
+; Path to the siano-userland CLI (argc/argv, no shell).
+cli_path = /usr/local/bin/siano-ts
+
+; External channel table (8-column TSV, see channels-ground.example.tsv).
+channel_table = BonDriver_Siano.channels.tsv
+
+; Time to wait for the first TS bytes after tuning, milliseconds.
+tune_timeout_ms = 4000
+
+; Bounded shutdown: SIGTERM grace, then SIGKILL wait (POSIX).
+stop_timeout_ms = 5000
+kill_timeout_ms = 2000
+
+; Bounded TS queue size in bytes. Overflow drops whole 188-byte packets.
+buffer_limit_bytes = 8388608
+
+; Child stderr handling: stderr | discard | file:PATH
+diagnostics = stderr
+
+; Cross-process lease directory. Optional; defaults to /run/bondriver-userland.
+; lock_dir = /run/bondriver-userland
+
+[siano]
+; Exactly one of device (fixed) or devices (pool) is required.
+; Canonical selector only; different selectors that name the same physical
+; device are aliases and are not detected.
+device = 0
+
+; Pool form (choose a free selector, dedicated order preserved):
+; devices = 0,1
+
+; Optional Siano ISDB-T firmware path passed as --firmware.
+; firmware = /lib/firmware/isdbt_rio.inp
