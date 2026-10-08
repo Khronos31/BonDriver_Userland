@@ -7,7 +7,7 @@
 
 ## 成果物
 
-| バックエンド | Linux | Windows | macOS |
+| バックエンド | Linux x64 / arm64 | Windows x64 | macOS arm64 |
 | --- | --- | --- | --- |
 | Siano | `BonDriver_Siano.so` | `BonDriver_Siano.dll` | `BonDriver_Siano.dylib` |
 | PX4 | `BonDriver_PX4.so` | `BonDriver_PX4.dll` | `BonDriver_PX4.dylib` |
@@ -172,14 +172,18 @@ INI のあるディレクトリ基準で解決し、アプリの cwd には依�
 
 ## 検証状況
 
-- 2026-10-08: Linux Clang 19 common WERROR CTest 31/31、macOS arm64 AppleClang 21 CTest 31/31（7.57秒）、
-  Windows MSVC 19.51 x64/x86 common `/W4 /WX` CTest 31/31（18.55秒 / 18.88秒）。Linux ASan/UBSan も
+- 正式対象の Linux x64 は Clang 19 common WERROR CTest 31/31、Linux arm64 は GCC 14.2 cross-build と QEMU/PRoot
+  隔離エミュレーションで CTest 31/31（14.67秒）、macOS arm64 は AppleClang 21 CTest 31/31（7.57秒）、
+  Windows x64 は MSVC 19.51 common `/W4 /WX` CTest 31/31（18.55秒）です。Linux x64 ASan/UBSan も
   `ASAN_OPTIONS=detect_leaks=1` と `UBSAN_OPTIONS=halt_on_error=1` で 31/31 です。
-- release (`BUILD_TESTING=OFF`) は Linux/macOS/Windows x64/x86 の全4構成で両方の共有ライブラリをビルドしました。
-- 隔離 consumer による ABI 検証では、各OS構成で両バックエンドそれぞれについて、公式に配布された ABI 宣言を使った
-  EDCB C++/struct consumer 79項目と LibISDB consumer 26項目が成功し、失敗・不明はありません。
+- release (`BUILD_TESTING=OFF`) は Linux x64、Linux arm64、Windows x64、macOS arm64 で両方の共有ライブラリをビルドしました。
+  Linux arm64 の生成物は ELF `aarch64` と確認済みです。arm64 はQEMU/PRoot上のエミュレーション検証で、実機ネイティブ実行は未実施です。
+- 独立 consumer による ABI 検証では、正式対象の各構成で両バックエンドそれぞれについて、公式に配布された ABI 宣言を使った
+  EDCB C++/struct consumer 79項目と LibISDB consumer 26項目が成功し、失敗・不明はありません。Linux arm64も
+  cross-buildした両backendをエミュレーション実行し、同じ項目が全て成功しました。
+- Windows x86 も追加で検証済みですが、正式対象ではありません。
 - Windows PX4 は、同じ CLI オプションと TS 出力を持つ `px4-ts` の将来提供を前提とします。
   提供前は実受信未確認です。実測 CNR も未取得です。
-- 実 EDCB / TVTest アプリ本体 / 実機での受入、および将来の Windows PX4 CLI integration は未検証です。
+- Linux arm64 の実機ネイティブ実行、実 EDCB / TVTest アプリ本体 / 実機での受入、および将来の Windows PX4 CLI integration は未検証です。
 
 ライセンスとコードの出自は [NOTICE](NOTICE) を参照してください。
