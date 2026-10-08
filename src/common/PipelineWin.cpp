@@ -7,10 +7,14 @@
 // without closing a pipe under an in-flight read.
 #include "bondriver/Pipeline.h"
 #include "bondriver/DebugLog.h"
+#include "ProcessEnvironment.h"
 
 #include <windows.h>
 
 #include <cstdlib>
+#include <chrono>
+#include <new>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -103,7 +107,7 @@ bool readAvailable(HANDLE pipe, char *buf, DWORD cap, DWORD &read, bool &broken)
 	return true;
 }
 
-void readerLoop(Pipeline *self, Pipeline::Impl *impl)
+void readerLoop(Pipeline *self, Pipeline::Impl *impl) try
 {
 	char buf[65536];
 	bool broken = false;
@@ -145,6 +149,7 @@ void readerLoop(Pipeline *self, Pipeline::Impl *impl)
 	}
 	self->readerMarkClosed(true, false);
 }
+catch (...) { self->readerMarkClosed(true, true); }
 
 } // namespace
 
@@ -152,21 +157,44 @@ Pipeline::Pipeline() = default;
 
 Pipeline::~Pipeline()
 {
-	stop(2000, 1000);
+	try { stop(2000, 1000); } catch (...) {}
 }
 
 bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 {
+	if (cleanupFailed()) {
+		error = "pipeline cleanup previously failed";
+		return false;
+	}
 	if (running_) {
 		error = "pipeline already running";
 		return false;
 	}
-	auto *impl = new Impl();
+	std::wstring command_line;
+	std::wstring diagnostics_path;
+	std::vector<wchar_t> cmd;
+	std::vector<char> attr_buf;
+	SIZE_T attr_size = 0;
+	try {
+		command_line = buildCommandLine(spec.argv);
+		cmd.assign(command_line.begin(), command_line.end());
+		cmd.push_back(L'\0');
+		if (spec.diagnostics.rfind("file:", 0) == 0 && !spec.diagnostics_file.empty()) {
+			diagnostics_path = toWide(spec.diagnostics_file);
+		}
+		InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
+		attr_buf.resize(attr_size);
+	} catch (...) {
+		try { error = "process startup allocation failed"; } catch (...) {}
+		return false;
+	}
+	std::unique_ptr<Impl> impl_owner(new Impl());
+	auto *impl = impl_owner.get();
 	impl->diag_mode = spec.diagnostics;
 	impl->stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 	if (impl->stop_event == nullptr) {
-		error = "CreateEvent failed";
-		delete impl;
+		impl_owner.reset();
+		try { error = "CreateEvent failed"; } catch (...) {}
 		return false;
 	}
 
@@ -175,16 +203,16 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 	sa.bInheritHandle = TRUE;
 	HANDLE out_r = nullptr, out_w = nullptr, err_r = nullptr, err_w = nullptr, child_err = nullptr;
 	if (!CreatePipe(&out_r, &out_w, &sa, 1 << 20)) {
-		error = "CreatePipe(stdout) failed";
 		CloseHandle(impl->stop_event);
-		delete impl;
+		impl_owner.reset();
+		try { error = "CreatePipe(stdout) failed"; } catch (...) {}
 		return false;
 	}
 	SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
 	if (!CreatePipe(&err_r, &err_w, &sa, 1 << 16)) {
 		CloseHandle(out_r); CloseHandle(out_w); CloseHandle(impl->stop_event);
-		error = "CreatePipe(stderr) failed";
-		delete impl;
+		impl_owner.reset();
+		try { error = "CreatePipe(stderr) failed"; } catch (...) {}
 		return false;
 	}
 	SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
@@ -197,8 +225,7 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 		child_err = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &child_sa,
 		                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 	} else if (spec.diagnostics.rfind("file:", 0) == 0 && !spec.diagnostics_file.empty()) {
-		const std::wstring path = toWide(spec.diagnostics_file);
-		child_err = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, &child_sa, OPEN_ALWAYS,
+		child_err = CreateFileW(diagnostics_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, &child_sa, OPEN_ALWAYS,
 		                        FILE_ATTRIBUTE_NORMAL, nullptr);
 		if (child_err != INVALID_HANDLE_VALUE && child_err != nullptr && GetFileType(child_err) != FILE_TYPE_DISK) {
 			CloseHandle(child_err);
@@ -213,8 +240,8 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 		if (err_r) CloseHandle(err_r);
 		if (err_w) CloseHandle(err_w);
 		CloseHandle(impl->stop_event);
-		error = "cannot prepare child diagnostic handle";
-		delete impl;
+		impl_owner.reset();
+		try { error = "cannot prepare child diagnostic handle"; } catch (...) {}
 		return false;
 	}
 	bool job_ok = false;
@@ -225,10 +252,6 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 		job_ok = SetInformationJobObject(impl->job, JobObjectExtendedLimitInformation, &info, sizeof info) != FALSE;
 	}
 
-	std::wstring command_line = buildCommandLine(spec.argv);
-	std::vector<wchar_t> cmd(command_line.begin(), command_line.end());
-	cmd.push_back(L'\0');
-
 	STARTUPINFOEXW si{};
 	si.StartupInfo.cb = sizeof si;
 	si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -237,9 +260,6 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 	si.StartupInfo.hStdError = child_err;
 
 	HANDLE inherit_handles[2] = {out_w, child_err};
-	SIZE_T attr_size = 0;
-	InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
-	std::vector<char> attr_buf(attr_size);
 	si.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attr_buf.data());
 	bool list_ok = InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attr_size) != FALSE;
 	if (list_ok) {
@@ -270,8 +290,8 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 		if (impl->job != nullptr) {
 			CloseHandle(impl->job);
 		}
-		error = std::string(what) + " failed: " + std::to_string(GetLastError());
-		delete impl;
+		impl_owner.reset();
+		try { error = std::string(what) + " failed: " + std::to_string(GetLastError()); } catch (...) {}
 		return false;
 	};
 
@@ -293,6 +313,7 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 	impl->stdout_read = out_r;
 	impl->stderr_read = err_r;
 	impl_ = impl;
+	impl_owner.release();
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		buffer_.purge();
@@ -303,7 +324,22 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 		last_logged_drops_ = 0;
 		diag_tail_.clear();
 	}
-	reader_ = std::thread(readerLoop, this, impl);
+	try {
+#ifdef BONDRIVER_ENABLE_TEST_FAULTS
+		if (!processEnvironmentValue("BONDRIVER_FAULT_THREAD_START").empty()) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			throw std::bad_alloc();
+		}
+#endif
+		reader_ = std::thread(readerLoop, this, impl);
+	} catch (...) {
+		const bool stopped = stop(2000, 1000);
+		try {
+			error = stopped ? "reader thread creation failed" :
+			                  "reader thread creation failed and child cleanup failed";
+		} catch (...) {}
+		return false;
+	}
 	return true;
 }
 
@@ -326,7 +362,7 @@ bool Pipeline::stop(uint64_t stop_timeout_ms, uint64_t kill_timeout_ms)
 {
 	Impl *impl = impl_;
 	if (impl == nullptr) {
-		return true;
+		return !cleanupFailed();
 	}
 	SetEvent(impl->stop_event);
 	if (reader_.joinable()) {
@@ -355,7 +391,7 @@ bool Pipeline::stop(uint64_t stop_timeout_ms, uint64_t kill_timeout_ms)
 		CloseHandle(impl->job);
 	}
 #ifdef BONDRIVER_ENABLE_TEST_FAULTS
-	if (ok && std::getenv("BONDRIVER_FAULT_STOP") != nullptr) {
+	if (ok && !processEnvironmentValue("BONDRIVER_FAULT_STOP").empty()) {
 		// Test-only fault injection, mirroring the POSIX implementation.
 		ok = false;
 	}
@@ -364,6 +400,7 @@ bool Pipeline::stop(uint64_t stop_timeout_ms, uint64_t kill_timeout_ms)
 		std::lock_guard<std::mutex> lock(mutex_);
 		if (!ok) {
 			read_error_ = true;
+			cleanup_failed_ = true;
 		}
 		reaped_ = ok;
 		running_ = false;
@@ -379,6 +416,12 @@ bool Pipeline::running() const
 {
 	std::lock_guard<std::mutex> lock(mutex_);
 	return running_;
+}
+
+bool Pipeline::cleanupFailed() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return cleanup_failed_;
 }
 
 bool Pipeline::stdoutClosed() const

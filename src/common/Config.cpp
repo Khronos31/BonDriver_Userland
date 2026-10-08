@@ -1,10 +1,10 @@
 #include "bondriver/Config.h"
+#include "ProcessEnvironment.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <map>
 #include <limits>
@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 
 #ifdef _WIN32
+#  include <filesystem>
 #  include <windows.h>
 #else
 #  include <limits.h>
@@ -308,8 +309,13 @@ bool parseIni(const std::string &text, IniFile &out, std::string &error)
 bool readFile(const std::string &path, std::string &out, std::string &error)
 {
 	// u8path keeps UTF-8 paths intact on Windows (std::ifstream(std::string)
-	// would use the active code page otherwise).
+	// would use the active code page otherwise). POSIX ifstream accepts UTF-8
+	// path bytes directly and avoids GCC 8's separate stdc++fs link dependency.
+#ifdef _WIN32
 	std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
+#else
+	std::ifstream file(path, std::ios::binary);
+#endif
 	if (!file) {
 		error = "cannot open '" + path + "': " + std::strerror(errno);
 		return false;
@@ -625,9 +631,9 @@ bool loadCommon(const IniFile &ini, const std::string &dir, CommonConfig &out, s
 	const std::string lock_dir = getOr(table, "lock_dir", "");
 	if (lock_dir.empty()) {
 #ifdef _WIN32
-		const char *program_data = std::getenv("ProgramData");
-		out.lock_dir = (program_data != nullptr && *program_data != '\0')
-		                   ? std::string(program_data) + "/BonDriver_Userland"
+		const std::string program_data = processEnvironmentValue("ProgramData");
+		out.lock_dir = !program_data.empty()
+		                   ? program_data + "/BonDriver_Userland"
 		                   : std::string("C:/ProgramData/BonDriver_Userland");
 #elif defined(__APPLE__)
 		const char *tmp = std::getenv("TMPDIR");
@@ -891,12 +897,12 @@ std::string resolveConfigPath(const std::string &module_path, BackendKind kind, 
 {
 	module_dir = dirName(module_path);
 	module_basename = stripLibraryExtension(baseName(module_path));
-	const char *override_env = kind == BackendKind::Siano ? std::getenv("BONDRIVER_SIANO_CONFIG")
-	                                                      : std::getenv("BONDRIVER_PX4_CONFIG");
-	if (override_env == nullptr || *override_env == '\0') {
-		override_env = std::getenv("BONDRIVER_CONFIG");
+	std::string override_env = processEnvironmentValue(kind == BackendKind::Siano ? "BONDRIVER_SIANO_CONFIG"
+	                                                                                : "BONDRIVER_PX4_CONFIG");
+	if (override_env.empty()) {
+		override_env = processEnvironmentValue("BONDRIVER_CONFIG");
 	}
-	if (override_env != nullptr && *override_env != '\0') {
+	if (!override_env.empty()) {
 		return normalizePath(override_env);
 	}
 	return module_dir + "/" + module_basename + ".ini";

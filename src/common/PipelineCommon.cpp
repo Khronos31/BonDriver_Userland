@@ -1,8 +1,11 @@
 // Platform-independent Pipeline helpers shared by the POSIX and Windows
 // implementations.
 #include "bondriver/Pipeline.h"
+#include "ProcessEnvironment.h"
 
+#include <atomic>
 #include <chrono>
+#include <new>
 #include <thread>
 
 namespace bondriver {
@@ -14,6 +17,12 @@ void Pipeline::sleepMillis(uint64_t ms)
 
 void Pipeline::readerAppendTs(const uint8_t *data, size_t n)
 {
+#ifdef BONDRIVER_ENABLE_TEST_FAULTS
+	static std::atomic<bool> injected{false};
+	if (!processEnvironmentValue("BONDRIVER_FAULT_READER_APPEND").empty() && !injected.exchange(true)) {
+		throw std::bad_alloc();
+	}
+#endif
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		buffer_.append(data, n);
@@ -50,16 +59,19 @@ std::string Pipeline::readerGetDiagTail()
 	return diag_tail_;
 }
 
-void Pipeline::readerMarkClosed(bool eof, bool read_error)
+void Pipeline::readerMarkClosed(bool eof, bool read_error) noexcept
 {
-	std::lock_guard<std::mutex> lock(mutex_);
-	if (eof || read_error) {
-		stdout_closed_ = eof;
+	try {
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (eof || read_error) {
+			stdout_closed_ = eof;
+		}
+		if (read_error) {
+			read_error_ = true;
+		}
+		cv_.notify_all();
+	} catch (...) {
 	}
-	if (read_error) {
-		read_error_ = true;
-	}
-	cv_.notify_all();
 }
 
 } // namespace bondriver

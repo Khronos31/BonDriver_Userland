@@ -41,6 +41,7 @@ public:
 	bool stop(uint64_t stop_timeout_ms, uint64_t kill_timeout_ms);
 
 	bool running() const;
+	bool cleanupFailed() const;
 	bool stdoutClosed() const;
 	bool readError() const;
 	bool reaped() const;
@@ -55,7 +56,7 @@ public:
 	void readerAppendTs(const uint8_t *data, size_t n);
 	void readerSetDiagTail(const std::string &tail);
 	std::string readerGetDiagTail();
-	void readerMarkClosed(bool eof, bool read_error);
+	void readerMarkClosed(bool eof, bool read_error) noexcept;
 
 	static void sleepMillis(uint64_t ms);
 
@@ -72,6 +73,7 @@ private:
 	bool read_error_ = false;
 	bool reaped_ = true;
 	bool running_ = false;
+	bool cleanup_failed_ = false;
 	uint64_t last_logged_drops_ = 0;
 	std::string diag_tail_;
 	std::thread reader_;

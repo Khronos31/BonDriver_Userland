@@ -2,11 +2,13 @@
 
 #include "bondriver/DebugLog.h"
 #include "bondriver/ModulePath.h"
+#include "ProcessEnvironment.h"
 #include "bondriver/Utf16.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <new>
 
 namespace bondriver {
 
@@ -118,20 +120,24 @@ DriverCore::DriverCore(std::shared_ptr<const Config> config, std::shared_ptr<Bac
 
 DriverCore::~DriverCore()
 {
-	// A previous failed cleanup already disposed the pipeline, so a second
-	// stop would be vacuously true.  Consult the persistent failure history
-	// instead of trusting that second call, and never release the lease.
-	if (cleanup_failed_) {
-		logLine(backend_->tag(), "release with prior cleanup failure; receiver lease kept");
+	try {
+		// A previous failed cleanup already disposed the pipeline, so a second
+		// stop would be vacuously true. Consult the persistent failure history
+		// instead of trusting that second call, and never release the lease.
+		if (cleanup_failed_) {
+			logLine(backend_->tag(), "release with prior cleanup failure; receiver lease kept");
+			lease_.abandon();
+			return;
+		}
+		if (!pipeline_.stop(config_->common.stop_timeout_ms, config_->common.kill_timeout_ms)) {
+			logLine(backend_->tag(), "cleanup failed during release; receiver lease kept");
+			lease_.abandon();
+			return;
+		}
+		releaseTargetLocked();
+	} catch (...) {
 		lease_.abandon();
-		return;
 	}
-	if (!pipeline_.stop(config_->common.stop_timeout_ms, config_->common.kill_timeout_ms)) {
-		logLine(backend_->tag(), "cleanup failed during release; receiver lease kept");
-		lease_.abandon();
-		return;
-	}
-	releaseTargetLocked();
 }
 
 bool DriverCore::openTunerLocked()
@@ -204,7 +210,15 @@ bool DriverCore::claimTargetLocked(bool want_t, bool want_s)
 			}
 			std::string err;
 			if (lease_.acquire(lockPathFor(lock_dir, target.key), err)) {
-				target_ = target;
+				try {
+#ifdef BONDRIVER_ENABLE_TEST_FAULTS
+					if (!processEnvironmentValue("BONDRIVER_FAULT_AFTER_LEASE").empty()) throw std::bad_alloc();
+#endif
+					target_ = target;
+				} catch (...) {
+					lease_.release();
+					throw;
+				}
 				leased_ = true;
 				return true;
 			}
@@ -223,7 +237,58 @@ void DriverCore::releaseTargetLocked()
 	target_ = ReceiverTarget{};
 }
 
-const BOOL DriverCore::OpenTuner(void)
+void DriverCore::recoverFailedChannelNoThrow() noexcept
+{
+	try {
+		std::lock_guard<std::mutex> lock(mu_);
+		failed_ = true;
+		have_channel_ = false;
+		if (!pipeline_.stop(config_->common.stop_timeout_ms, config_->common.kill_timeout_ms)) {
+			cleanup_failed_ = true;
+			opened_ = false;
+			lease_.abandon();
+			return;
+		}
+		std::lock_guard<std::mutex> pl(pipeline_.mutex());
+		pipeline_.buffer().purge();
+	} catch (...) {
+		cleanup_failed_ = true;
+		opened_ = false;
+		failed_ = true;
+		have_channel_ = false;
+		lease_.abandon();
+	}
+}
+
+void DriverCore::recoverFailedCloseNoThrow() noexcept
+{
+	try {
+		std::lock_guard<std::mutex> lock(mu_);
+		opened_ = false;
+		failed_ = true;
+		have_channel_ = false;
+		if (!pipeline_.stop(config_->common.stop_timeout_ms, config_->common.kill_timeout_ms)) {
+			cleanup_failed_ = true;
+			lease_.abandon();
+			return;
+		}
+		{
+			std::lock_guard<std::mutex> pl(pipeline_.mutex());
+			pipeline_.buffer().purge();
+		}
+		releaseTargetLocked();
+		cleanup_failed_ = false;
+		failed_ = false;
+	} catch (...) {
+		cleanup_failed_ = true;
+		opened_ = false;
+		failed_ = true;
+		have_channel_ = false;
+		lease_.abandon();
+	}
+}
+
+const BOOL DriverCore::OpenTuner(void) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (opened_) {
@@ -231,8 +296,12 @@ const BOOL DriverCore::OpenTuner(void)
 	}
 	return openTunerLocked() ? TRUE : FALSE;
 }
+catch (...) {
+	recoverFailedCloseNoThrow();
+	return FALSE;
+}
 
-void DriverCore::CloseTuner(void)
+void DriverCore::CloseTuner(void) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (!opened_ && !leased_) {
@@ -240,6 +309,7 @@ void DriverCore::CloseTuner(void)
 	}
 	closeTunerLocked();
 }
+catch (...) { recoverFailedCloseNoThrow(); }
 
 bool DriverCore::startChannelLocked(size_t space, size_t channel)
 {
@@ -298,6 +368,12 @@ bool DriverCore::startChannelLocked(size_t space, size_t channel)
 		logLine(backend_->tag(), "spawn failed: " + err);
 		failed_ = true;
 		have_channel_ = false;
+		if (pipeline_.cleanupFailed()) {
+			cleanup_failed_ = true;
+			opened_ = false;
+			lease_.abandon();
+			logLine(backend_->tag(), "reader startup cleanup failed; receiver lease kept");
+		}
 		return false;
 	}
 	if (!pipeline_.waitReady(config_->common.tune_timeout_ms)) {
@@ -327,7 +403,7 @@ bool DriverCore::restartCurrentLocked()
 	return startChannelLocked(space_, channel_);
 }
 
-const BOOL DriverCore::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
+const BOOL DriverCore::SetChannel(const DWORD dwSpace, const DWORD dwChannel) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (!opened_) {
@@ -335,8 +411,12 @@ const BOOL DriverCore::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 	}
 	return startChannelLocked(dwSpace, dwChannel) ? TRUE : FALSE;
 }
+catch (...) {
+	recoverFailedChannelNoThrow();
+	return FALSE;
+}
 
-const BOOL DriverCore::SetChannel(const BYTE bCh)
+const BOOL DriverCore::SetChannel(const BYTE bCh) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (!opened_ || config_->spaces.empty()) {
@@ -352,6 +432,10 @@ const BOOL DriverCore::SetChannel(const BYTE bCh)
 	}
 	return startChannelLocked(0, index) ? TRUE : FALSE;
 }
+catch (...) {
+	recoverFailedChannelNoThrow();
+	return FALSE;
+}
 
 const float DriverCore::GetSignalLevel(void)
 {
@@ -360,7 +444,7 @@ const float DriverCore::GetSignalLevel(void)
 	return 0.0f;
 }
 
-const DWORD DriverCore::WaitTsStream(const DWORD dwTimeOut)
+const DWORD DriverCore::WaitTsStream(const DWORD dwTimeOut) try
 {
 	DWORD timeout = dwTimeOut;
 	if (timeout == kWaitFailed || timeout > kMaxWaitMs) {
@@ -394,8 +478,9 @@ const DWORD DriverCore::WaitTsStream(const DWORD dwTimeOut)
 	}
 	return kWaitTimeout;
 }
+catch (...) { return kWaitFailed; }
 
-const DWORD DriverCore::GetReadyCount(void)
+const DWORD DriverCore::GetReadyCount(void) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (!opened_ || cleanup_failed_) {
@@ -404,8 +489,9 @@ const DWORD DriverCore::GetReadyCount(void)
 	std::lock_guard<std::mutex> pl(pipeline_.mutex());
 	return static_cast<DWORD>(pipeline_.buffer().readyBufferCount());
 }
+catch (...) { return 0; }
 
-const BOOL DriverCore::GetTsStream(BYTE *pDst, DWORD *pdwSize, DWORD *pdwRemain)
+const BOOL DriverCore::GetTsStream(BYTE *pDst, DWORD *pdwSize, DWORD *pdwRemain) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (pdwSize == nullptr) {
@@ -431,8 +517,13 @@ const BOOL DriverCore::GetTsStream(BYTE *pDst, DWORD *pdwSize, DWORD *pdwRemain)
 	}
 	return ok ? TRUE : FALSE;
 }
+catch (...) {
+	if (pdwSize != nullptr) *pdwSize = 0;
+	if (pdwRemain != nullptr) *pdwRemain = 0;
+	return FALSE;
+}
 
-const BOOL DriverCore::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain)
+const BOOL DriverCore::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (ppDst == nullptr || pdwSize == nullptr) {
@@ -460,8 +551,14 @@ const BOOL DriverCore::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemai
 	}
 	return (ptr != nullptr && out != 0) ? TRUE : FALSE;
 }
+catch (...) {
+	if (ppDst != nullptr) *ppDst = nullptr;
+	if (pdwSize != nullptr) *pdwSize = 0;
+	if (pdwRemain != nullptr) *pdwRemain = 0;
+	return FALSE;
+}
 
-void DriverCore::PurgeTsStream(void)
+void DriverCore::PurgeTsStream(void) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	{
@@ -477,25 +574,29 @@ void DriverCore::PurgeTsStream(void)
 		}
 	}
 }
+catch (...) { recoverFailedChannelNoThrow(); }
 
-void DriverCore::Release(void)
+void DriverCore::Release(void) try
 {
 	CloseTuner();
 	delete this;
 }
+catch (...) {}
 
-const BON16CHAR *DriverCore::GetTunerName(void)
+const BON16CHAR *DriverCore::GetTunerName(void) try
 {
 	return reinterpret_cast<const BON16CHAR *>(tuner_name_.c_str());
 }
+catch (...) { return nullptr; }
 
-const BOOL DriverCore::IsTunerOpening(void)
+const BOOL DriverCore::IsTunerOpening(void) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	return opened_ ? TRUE : FALSE;
 }
+catch (...) { return FALSE; }
 
-const BON16CHAR *DriverCore::EnumTuningSpace(const DWORD dwSpace)
+const BON16CHAR *DriverCore::EnumTuningSpace(const DWORD dwSpace) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (dwSpace >= space_names_.size()) {
@@ -503,8 +604,9 @@ const BON16CHAR *DriverCore::EnumTuningSpace(const DWORD dwSpace)
 	}
 	return reinterpret_cast<const BON16CHAR *>(space_names_[dwSpace].c_str());
 }
+catch (...) { return nullptr; }
 
-const BON16CHAR *DriverCore::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
+const BON16CHAR *DriverCore::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (dwSpace >= channel_names_.size() || dwChannel >= channel_names_[dwSpace].size()) {
@@ -512,6 +614,7 @@ const BON16CHAR *DriverCore::EnumChannelName(const DWORD dwSpace, const DWORD dw
 	}
 	return reinterpret_cast<const BON16CHAR *>(channel_names_[dwSpace][dwChannel].c_str());
 }
+catch (...) { return nullptr; }
 
 bool DriverCore::currentChannelValidLocked()
 {
@@ -526,7 +629,7 @@ bool DriverCore::currentChannelValidLocked()
 	return true;
 }
 
-const DWORD DriverCore::GetCurSpace(void)
+const DWORD DriverCore::GetCurSpace(void) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (!currentChannelValidLocked()) {
@@ -534,8 +637,9 @@ const DWORD DriverCore::GetCurSpace(void)
 	}
 	return space_;
 }
+catch (...) { return BONDRIVER_SPACE_INVALID; }
 
-const DWORD DriverCore::GetCurChannel(void)
+const DWORD DriverCore::GetCurChannel(void) try
 {
 	std::lock_guard<std::mutex> lock(mu_);
 	if (!currentChannelValidLocked()) {
@@ -543,6 +647,7 @@ const DWORD DriverCore::GetCurChannel(void)
 	}
 	return channel_;
 }
+catch (...) { return BONDRIVER_CHANNEL_INVALID; }
 
 const LibraryState &libraryState(BackendKind kind)
 {
@@ -565,8 +670,11 @@ const LibraryState &libraryState(BackendKind kind)
 	return state;
 }
 
-IBonDriver2 *createDriverObject(BackendKind kind)
+IBonDriver2 *createDriverObject(BackendKind kind) try
 {
+#ifdef BONDRIVER_ENABLE_TEST_FAULTS
+	if (!processEnvironmentValue("BONDRIVER_FAULT_FACTORY").empty()) throw std::bad_alloc();
+#endif
 	const LibraryState &state = libraryState(kind);
 	if (!state.valid) {
 		logLine("bondriver", "CreateBonDriver failed: " + state.error);
@@ -574,6 +682,7 @@ IBonDriver2 *createDriverObject(BackendKind kind)
 	}
 	return new DriverCore(state.config, state.backend);
 }
+catch (...) { return nullptr; }
 
 namespace {
 
@@ -590,7 +699,7 @@ StructHolder &structHolder()
 	return holder;
 }
 
-void structRelease(void *p)
+void structRelease(void *p) try
 {
 	static_cast<IBonDriver *>(p)->Release();
 	StructHolder &holder = structHolder();
@@ -598,11 +707,15 @@ void structRelease(void *p)
 	holder.core = nullptr;
 	holder.active = false;
 }
+catch (...) {}
 
 } // namespace
 
-const STRUCT_IBONDRIVER *createDriverStruct(BackendKind kind)
+const STRUCT_IBONDRIVER *createDriverStruct(BackendKind kind) try
 {
+#ifdef BONDRIVER_ENABLE_TEST_FAULTS
+	if (!processEnvironmentValue("BONDRIVER_FAULT_FACTORY").empty()) throw std::bad_alloc();
+#endif
 	const LibraryState &state = libraryState(kind);
 	if (!state.valid) {
 		logLine("bondriver", "CreateBonStruct failed: " + state.error);
@@ -623,5 +736,6 @@ const STRUCT_IBONDRIVER *createDriverStruct(BackendKind kind)
 	holder.active = true;
 	return &holder.st2.st;
 }
+catch (...) { return nullptr; }
 
 } // namespace bondriver

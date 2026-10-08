@@ -17,6 +17,14 @@ target_link_libraries(test_process PRIVATE bondriver_common Threads::Threads)
 
 add_executable(test_driver test_driver.cpp)
 target_include_directories(test_driver PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+if(MSVC AND BONDRIVER_STATIC_CRT)
+	set(_bondriver_test_static_crt "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	foreach(target IN ITEMS test_config test_buffer test_process)
+		set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY "${_bondriver_test_static_crt}")
+	endforeach()
+endif()
+
 if(NOT WIN32)
 	target_link_libraries(test_driver PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
 endif()
@@ -49,6 +57,10 @@ set(BONDRIVER_SCENARIOS
 	multiple_buffers
 	wait_close
 	invalid_config
+	process_environment
+	factory_failure
+	thread_start_failure
+	thread_start_cleanup_failure
 	cleanup_failure)
 set(BONDRIVER_BACKENDS "siano:BonDriver_Siano" "px4:BonDriver_PX4")
 foreach(pair ${BONDRIVER_BACKENDS})
@@ -82,6 +94,7 @@ elseif(UNIX)
 		COMMAND ${CMAKE_COMMAND}
 			-DLIBS=$<TARGET_FILE:BonDriver_Siano>|$<TARGET_FILE:BonDriver_PX4>
 			-DSYS=${CMAKE_SYSTEM_NAME}
+			-DSTATIC_CXX=${BONDRIVER_STATIC_CXX_RUNTIME}
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/check_exports.cmake)
 endif()
 

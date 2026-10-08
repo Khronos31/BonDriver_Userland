@@ -5,6 +5,8 @@
 #include "test_util.h"
 
 #include <chrono>
+#include <cerrno>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -115,6 +117,17 @@ void setEnv(const char *name, const char *value)
 	} else {
 		setenv(name, value, 1);
 	}
+#endif
+}
+
+void setProcessEnvironment(const char *name, const std::string &value)
+{
+#ifdef _WIN32
+	const std::wstring wide_name = toWideLocal(name);
+	const std::wstring wide_value = toWideLocal(value);
+	SetEnvironmentVariableW(wide_name.c_str(), wide_value.c_str());
+#else
+	setenv(name, value.c_str(), 1);
 #endif
 }
 
@@ -728,6 +741,163 @@ int scenarioInvalidConfig(const Api &api, const std::string &ini)
 	return 0;
 }
 
+int scenarioProcessEnvironment(const Api &api, const std::string &ini)
+{
+	const std::string alternate = g_root + "/process-environment.ini";
+	std::string contents = configText();
+	const std::string original = "tuner_name = Test Tuner";
+	const size_t pos = contents.find(original);
+	testutil::expect(pos != std::string::npos, "test config contains tuner name");
+	if (pos == std::string::npos) return 1;
+	contents.replace(pos, original.size(), "tuner_name = OS Environment Tuner");
+	testutil::writeFile(alternate, contents);
+	const char *var = g_siano ? "BONDRIVER_SIANO_CONFIG" : "BONDRIVER_PX4_CONFIG";
+	setProcessEnvironment(var, alternate);
+	IBonDriver2 *driver = api.createDriver();
+	testutil::expect(driver != nullptr, "factory reads process environment after library load");
+	if (driver != nullptr) {
+		const auto *name = reinterpret_cast<const char16_t *>(driver->GetTunerName());
+		const char16_t expected[] = u"OS Environment Tuner";
+		testutil::expect(name != nullptr && std::u16string(name) == expected,
+		                 "factory uses OS-level environment update");
+		driver->Release();
+	}
+	setEnv(var, ini.c_str());
+	return 0;
+}
+
+int scenarioFactoryFailure(const Api &api)
+{
+	setEnv("BONDRIVER_FAULT_FACTORY", "1");
+	testutil::expect(api.createDriver() == nullptr, "factory allocation failure returns null");
+	const STRUCT_IBONDRIVER *st = api.createStruct();
+	testutil::expect(st == nullptr, "struct factory allocation failure returns null");
+	setEnv("BONDRIVER_FAULT_FACTORY", nullptr);
+	IBonDriver2 *driver = api.createDriver();
+	testutil::expect(driver != nullptr, "factory recovers after allocation failure");
+	if (driver != nullptr) driver->Release();
+	st = api.createStruct();
+	testutil::expect(st != nullptr, "struct factory recovers after allocation failure");
+	if (st != nullptr) st->pF09(st->pCtx);
+	return 0;
+}
+
+int scenarioThreadStartFailure(const Api &api)
+{
+	IBonDriver2 *driver = api.createDriver();
+	testutil::expect(driver != nullptr, "factory succeeds for reader-thread fault test");
+	if (driver == nullptr) return 1;
+	int rc = 0;
+	setEnv("FAKE_MODE", "stream");
+	setEnv("FAKE_TAG", kTag0.c_str());
+	setEnv("BONDRIVER_FAULT_AFTER_LEASE", "1");
+	testutil::expect(driver->OpenTuner() == FALSE, "post-lease allocation failure is contained");
+	setEnv("BONDRIVER_FAULT_AFTER_LEASE", nullptr);
+	testutil::expect(driver->OpenTuner() == TRUE, "lease is reusable after post-acquisition allocation failure");
+	driver->CloseTuner();
+	const std::string pid_file = g_root + "/thread-start-child.pid";
+	setEnv("FAKE_PID_FILE", pid_file.c_str());
+	setEnv("BONDRIVER_FAULT_THREAD_START", "1");
+	testutil::expect(driver->OpenTuner() == TRUE, "open before injected reader-thread failure");
+	testutil::expect(driver->SetChannel(0, 0) == FALSE, "thread startup failure is reported");
+	for (int i = 0; i < 100 && !testutil::readFile(pid_file).size(); ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	const std::string pid_text = testutil::readFile(pid_file);
+	testutil::expect(!pid_text.empty(), "fault fixture observed spawned child before reader failure");
+	if (!pid_text.empty()) {
+		const long child_pid = std::strtol(pid_text.c_str(), nullptr, 10);
+#ifdef _WIN32
+		HANDLE child = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(child_pid));
+		const bool child_exited = child != nullptr && WaitForSingleObject(child, 0) == WAIT_OBJECT_0;
+		if (child != nullptr) CloseHandle(child);
+#else
+		const bool child_exited = child_pid > 0 && ::kill(static_cast<pid_t>(child_pid), 0) != 0 && errno == ESRCH;
+#endif
+		testutil::expect(child_exited, "failed reader startup reaps spawned child");
+	}
+	testutil::expect(driver->GetCurChannel() == BONDRIVER_CHANNEL_INVALID,
+	                 "failed reader startup leaves no current channel");
+	setEnv("BONDRIVER_FAULT_THREAD_START", nullptr);
+	setEnv("FAKE_PID_FILE", nullptr);
+	testutil::expect(driver->SetChannel(0, 0) == TRUE, "same channel can recover after thread startup failure");
+	testutil::expect(driver->WaitTsStream(2000) == 0, "recovered reader delivers TS");
+	BYTE *data = nullptr;
+	DWORD size = 0;
+	DWORD remain = 0;
+	testutil::expect(driver->GetTsStream(&data, &size, &remain) == TRUE && data != nullptr && size >= 188,
+	                 "recovered stream is readable");
+	driver->CloseTuner();
+	testutil::expect(driver->OpenTuner() == TRUE,
+	                 "fresh tuner session isolates the reader-allocation fault from the recovered reader");
+	setEnv("BONDRIVER_FAULT_READER_APPEND", "1");
+	testutil::expect(driver->SetChannel(0, 1) == FALSE, "reader allocation fault is contained and reported");
+	testutil::expect(driver->GetCurChannel() == BONDRIVER_CHANNEL_INVALID,
+	                 "reader exception invalidates current channel");
+	setEnv("BONDRIVER_FAULT_READER_APPEND", nullptr);
+	testutil::expect(driver->SetChannel(0, 1) == TRUE, "driver recovers after reader exception");
+	testutil::expect(driver->WaitTsStream(2000) == 0, "reader recovery delivers TS");
+	driver->CloseTuner();
+	driver->Release();
+	return rc;
+}
+
+int scenarioThreadStartCleanupFailure(const Api &api)
+{
+	IBonDriver2 *driver = api.createDriver();
+	testutil::expect(driver != nullptr, "factory succeeds for combined reader/cleanup fault test");
+	if (driver == nullptr) return 1;
+
+	setEnv("FAKE_MODE", "stream");
+	setEnv("FAKE_TAG", kTag0.c_str());
+	const std::string pid_file = g_root + "/thread-start-cleanup-child.pid";
+	setEnv("FAKE_PID_FILE", pid_file.c_str());
+	testutil::expect(driver->OpenTuner() == TRUE, "open before combined reader/cleanup fault");
+	setEnv("BONDRIVER_FAULT_THREAD_START", "1");
+	setEnv("BONDRIVER_FAULT_STOP", "1");
+	testutil::expect(driver->SetChannel(0, 0) == FALSE,
+	                 "reader startup and its cleanup failure are reported");
+	setEnv("BONDRIVER_FAULT_THREAD_START", nullptr);
+	setEnv("BONDRIVER_FAULT_STOP", nullptr);
+
+	for (int i = 0; i < 100 && testutil::readFile(pid_file).empty(); ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	const std::string pid_text = testutil::readFile(pid_file);
+	testutil::expect(!pid_text.empty(), "combined-fault fixture observed spawned child");
+	if (!pid_text.empty()) {
+		const long child_pid = std::strtol(pid_text.c_str(), nullptr, 10);
+#ifdef _WIN32
+		HANDLE child = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(child_pid));
+		const bool child_exited = child != nullptr && WaitForSingleObject(child, 0) == WAIT_OBJECT_0;
+		if (child != nullptr) CloseHandle(child);
+#else
+		const bool child_exited = child_pid > 0 && ::kill(static_cast<pid_t>(child_pid), 0) != 0 && errno == ESRCH;
+#endif
+		testutil::expect(child_exited, "combined-fault cleanup reaps the spawned child");
+	}
+	testutil::expect(driver->GetCurChannel() == BONDRIVER_CHANNEL_INVALID,
+	                 "combined failure leaves current channel invalid");
+	driver->CloseTuner();
+	testutil::expect(driver->OpenTuner() == FALSE,
+	                 "driver refuses reopen after reader-start cleanup failure");
+
+	IBonDriver2 *contender = api.createDriver();
+	testutil::expect(contender != nullptr, "second core created for quarantined-lease check");
+	if (contender != nullptr) {
+		testutil::expect(contender->OpenTuner() == FALSE,
+		                 "failed cleanup keeps lease unavailable to another core");
+		driver->Release();
+		driver = nullptr;
+		testutil::expect(contender->OpenTuner() == FALSE,
+		                 "Release does not make quarantined lease reusable");
+		contender->Release();
+	} else {
+		driver->Release();
+	}
+	return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -820,6 +990,14 @@ int main(int argc, char **argv)
 		rc = scenarioWaitClose(api);
 	} else if (scenario == "invalid_config") {
 		rc = scenarioInvalidConfig(api, ini);
+	} else if (scenario == "process_environment") {
+		rc = scenarioProcessEnvironment(api, ini);
+	} else if (scenario == "factory_failure") {
+		rc = scenarioFactoryFailure(api);
+	} else if (scenario == "thread_start_failure") {
+		rc = scenarioThreadStartFailure(api);
+	} else if (scenario == "thread_start_cleanup_failure") {
+		rc = scenarioThreadStartCleanupFailure(api);
 	} else if (scenario == "runtime_alias") {
 		rc = scenarioRuntimeAlias(api);
 	} else if (scenario == "cleanup_failure") {

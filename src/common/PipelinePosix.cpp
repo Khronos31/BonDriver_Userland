@@ -2,6 +2,7 @@
 // fds and poll(2).  No async-unsafe work happens after fork.
 #include "bondriver/Pipeline.h"
 #include "bondriver/DebugLog.h"
+#include "ProcessEnvironment.h"
 
 #include <cerrno>
 #include <chrono>
@@ -11,6 +12,8 @@
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
+#include <new>
+#include <memory>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -69,7 +72,7 @@ void closeIfValid(int &fd)
 
 // Returns the number of bytes read in this call; stops early when the caller's
 // budget is exhausted or the pipe is drained.
-void readerLoop(Pipeline *self, Pipeline::Impl *impl, const std::string &mode)
+void readerLoop(Pipeline *self, Pipeline::Impl *impl, const std::string &mode) try
 {
 	bool eof = false;
 	bool read_error = false;
@@ -157,6 +160,7 @@ void readerLoop(Pipeline *self, Pipeline::Impl *impl, const std::string &mode)
 	}
 	(void)mode;
 }
+catch (...) { self->readerMarkClosed(true, true); }
 
 bool waitReap(pid_t pid, uint64_t ms)
 {
@@ -193,16 +197,21 @@ Pipeline::Pipeline() = default;
 
 Pipeline::~Pipeline()
 {
-	stop(2000, 1000);
+	try { stop(2000, 1000); } catch (...) {}
 }
 
 bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 {
+	if (cleanupFailed()) {
+		error = "pipeline cleanup previously failed";
+		return false;
+	}
 	if (running_) {
 		error = "pipeline already running";
 		return false;
 	}
-	auto *impl = new Impl();
+	std::unique_ptr<Impl> impl_owner(new Impl());
+	auto *impl = impl_owner.get();
 	impl->diag_mode = spec.diagnostics;
 
 	int out_pipe[2] = {-1, -1};
@@ -218,71 +227,97 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 		closeIfValid(stop_pipe[0]);
 		closeIfValid(stop_pipe[1]);
 		closeIfValid(child_diag_fd);
-		delete impl;
+		impl_owner.reset();
 	};
 
 	if (!makePipe(out_pipe, true)) {
-		error = std::string("stdout pipe failed: ") + std::strerror(errno);
+		const int e = errno;
 		cleanupLocal();
+		try { error = std::string("stdout pipe failed: ") + std::strerror(e); } catch (...) {}
 		return false;
 	}
 	if (!makePipe(err_pipe, true)) {
-		error = std::string("stderr pipe failed: ") + std::strerror(errno);
+		const int e = errno;
 		cleanupLocal();
+		try { error = std::string("stderr pipe failed: ") + std::strerror(e); } catch (...) {}
 		return false;
 	}
 	if (!makePipe(stop_pipe, true)) {
-		error = std::string("stop pipe failed: ") + std::strerror(errno);
+		const int e = errno;
 		cleanupLocal();
+		try { error = std::string("stop pipe failed: ") + std::strerror(e); } catch (...) {}
 		return false;
 	}
 	if (!setNonBlocking(out_pipe[0]) || !setNonBlocking(err_pipe[0]) || !setNonBlocking(stop_pipe[0])) {
-		error = std::string("fcntl failed: ") + std::strerror(errno);
+		const int e = errno;
 		cleanupLocal();
+		try { error = std::string("fcntl failed: ") + std::strerror(e); } catch (...) {}
 		return false;
 	}
 	impl->stop_pipe[0] = stop_pipe[0];
 	impl->stop_pipe[1] = stop_pipe[1];
 
 	posix_spawn_file_actions_t fa;
-	posix_spawn_file_actions_init(&fa);
-	posix_spawn_file_actions_addopen(&fa, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-	posix_spawn_file_actions_adddup2(&fa, out_pipe[1], STDOUT_FILENO);
-	posix_spawn_file_actions_adddup2(&fa, err_pipe[1], STDERR_FILENO);
+	int action_rc = posix_spawn_file_actions_init(&fa);
+	if (action_rc != 0) {
+		cleanupLocal();
+		try { error = "posix_spawn file-actions initialization failed"; } catch (...) {}
+		return false;
+	}
+	auto addAction = [&](int rc) {
+		if (action_rc == 0) action_rc = rc;
+		return action_rc == 0;
+	};
+	bool actions_ok = addAction(posix_spawn_file_actions_addopen(&fa, STDIN_FILENO, "/dev/null", O_RDONLY, 0)) &&
+	                  addAction(posix_spawn_file_actions_adddup2(&fa, out_pipe[1], STDOUT_FILENO)) &&
+	                  addAction(posix_spawn_file_actions_adddup2(&fa, err_pipe[1], STDERR_FILENO));
 	if (spec.diagnostics == "discard") {
-		posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+		actions_ok = actions_ok && addAction(posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0));
 	} else if (spec.diagnostics.rfind("file:", 0) == 0 && !spec.diagnostics_file.empty()) {
 		child_diag_fd = ::open(spec.diagnostics_file.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NONBLOCK, 0644);
 		struct stat diag_stat{};
 		if (child_diag_fd < 0 || ::fstat(child_diag_fd, &diag_stat) != 0 || !S_ISREG(diag_stat.st_mode)) {
-			error = "diagnostics file must be an accessible regular file";
 			posix_spawn_file_actions_destroy(&fa);
 			cleanupLocal();
+			try { error = "diagnostics file must be an accessible regular file"; } catch (...) {}
 			return false;
 		}
-		posix_spawn_file_actions_adddup2(&fa, child_diag_fd, STDERR_FILENO);
+		actions_ok = actions_ok && addAction(posix_spawn_file_actions_adddup2(&fa, child_diag_fd, STDERR_FILENO));
 	}
-	posix_spawn_file_actions_addclose(&fa, out_pipe[0]);
-	posix_spawn_file_actions_addclose(&fa, out_pipe[1]);
-	posix_spawn_file_actions_addclose(&fa, err_pipe[0]);
-	posix_spawn_file_actions_addclose(&fa, err_pipe[1]);
+	actions_ok = actions_ok && addAction(posix_spawn_file_actions_addclose(&fa, out_pipe[0]));
+	actions_ok = actions_ok && addAction(posix_spawn_file_actions_addclose(&fa, out_pipe[1]));
+	actions_ok = actions_ok && addAction(posix_spawn_file_actions_addclose(&fa, err_pipe[0]));
+	actions_ok = actions_ok && addAction(posix_spawn_file_actions_addclose(&fa, err_pipe[1]));
+	if (!actions_ok) {
+		posix_spawn_file_actions_destroy(&fa);
+		cleanupLocal();
+		try { error = "posix_spawn file-actions setup failed"; } catch (...) {}
+		return false;
+	}
 	// stop_pipe/diag fds carry FD_CLOEXEC, so they never reach the child; the
 	// only inherited handles are the duplicated std handles.
 
 	std::vector<char *> argv;
-	argv.reserve(spec.argv.size() + 1);
-	for (const std::string &arg : spec.argv) {
-		argv.push_back(const_cast<char *>(arg.c_str()));
+	try {
+		argv.reserve(spec.argv.size() + 1);
+		for (const std::string &arg : spec.argv) {
+			argv.push_back(const_cast<char *>(arg.c_str()));
+		}
+		argv.push_back(nullptr);
+	} catch (...) {
+		posix_spawn_file_actions_destroy(&fa);
+		cleanupLocal();
+		try { error = "argument allocation failed before posix_spawn"; } catch (...) {}
+		return false;
 	}
-	argv.push_back(nullptr);
 
 	pid_t pid = -1;
 	const int rc = posix_spawn(&pid, argv[0], &fa, nullptr, argv.data(), environ);
 	posix_spawn_file_actions_destroy(&fa);
 	closeIfValid(child_diag_fd);
 	if (rc != 0) {
-		error = std::string("posix_spawn failed: ") + std::strerror(rc);
 		cleanupLocal();
+		try { error = std::string("posix_spawn failed: ") + std::strerror(rc); } catch (...) {}
 		return false;
 	}
 	::close(out_pipe[1]);
@@ -297,6 +332,7 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 	stop_pipe[0] = -1;
 	stop_pipe[1] = -1;
 	impl_ = impl;
+	impl_owner.release();
 
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
@@ -308,7 +344,22 @@ bool Pipeline::start(const SpawnSpec &spec, std::string &error)
 		last_logged_drops_ = 0;
 		diag_tail_.clear();
 	}
-	reader_ = std::thread(readerLoop, this, impl, spec.diagnostics);
+	try {
+#ifdef BONDRIVER_ENABLE_TEST_FAULTS
+		if (!processEnvironmentValue("BONDRIVER_FAULT_THREAD_START").empty()) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			throw std::bad_alloc();
+		}
+#endif
+		reader_ = std::thread(readerLoop, this, impl, spec.diagnostics);
+	} catch (...) {
+		const bool stopped = stop(2000, 1000);
+		try {
+			error = stopped ? "reader thread creation failed" :
+			                  "reader thread creation failed and child cleanup failed";
+		} catch (...) {}
+		return false;
+	}
 	return true;
 }
 
@@ -331,7 +382,7 @@ bool Pipeline::stop(uint64_t stop_timeout_ms, uint64_t kill_timeout_ms)
 {
 	Impl *impl = impl_;
 	if (impl == nullptr) {
-		return true;
+		return !cleanupFailed();
 	}
 	if (impl->stop_pipe[1] >= 0) {
 		const char c = 1;
@@ -346,7 +397,7 @@ bool Pipeline::stop(uint64_t stop_timeout_ms, uint64_t kill_timeout_ms)
 	closeIfValid(impl->stop_pipe[1]);
 	bool ok = terminateChild(impl->pid, stop_timeout_ms, kill_timeout_ms);
 #ifdef BONDRIVER_ENABLE_TEST_FAULTS
-	if (ok && std::getenv("BONDRIVER_FAULT_STOP") != nullptr) {
+	if (ok && !processEnvironmentValue("BONDRIVER_FAULT_STOP").empty()) {
 		// Test-only fault injection: report a cleanup failure even though the
 		// owned child was reaped.  Used to verify that a cleanup-failure
 		// history keeps the lease and does not advertise recovery.
@@ -357,6 +408,7 @@ bool Pipeline::stop(uint64_t stop_timeout_ms, uint64_t kill_timeout_ms)
 		std::lock_guard<std::mutex> lock(mutex_);
 		if (!ok) {
 			read_error_ = true;
+			cleanup_failed_ = true;
 		}
 		reaped_ = ok;
 		running_ = false;
@@ -372,6 +424,12 @@ bool Pipeline::running() const
 {
 	std::lock_guard<std::mutex> lock(mutex_);
 	return running_;
+}
+
+bool Pipeline::cleanupFailed() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return cleanup_failed_;
 }
 
 bool Pipeline::stdoutClosed() const

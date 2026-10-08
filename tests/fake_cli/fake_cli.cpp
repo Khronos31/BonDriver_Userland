@@ -15,6 +15,7 @@
 #ifdef _WIN32
 #  include <fcntl.h>
 #  include <io.h>
+#  include <process.h>
 #  include <windows.h>
 #else
 #  include <unistd.h>
@@ -181,6 +182,18 @@ int main(int argc, char **argv)
 	_setmode(_fileno(stdout), _O_BINARY);
 #endif
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
+	const char *pid_file = std::getenv("FAKE_PID_FILE");
+	if (pid_file != nullptr && *pid_file != '\0') {
+		FILE *pid_output = std::fopen(pid_file, "wb");
+		if (pid_output != nullptr) {
+#ifdef _WIN32
+			std::fprintf(pid_output, "%ld\n", static_cast<long>(_getpid()));
+#else
+			std::fprintf(pid_output, "%ld\n", static_cast<long>(::getpid()));
+#endif
+			std::fclose(pid_output);
+		}
+	}
 #ifndef _WIN32
 #ifndef _WIN32
 	std::signal(SIGPIPE, SIG_IGN);

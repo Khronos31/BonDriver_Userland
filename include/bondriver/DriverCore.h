@@ -51,6 +51,8 @@ private:
 	bool startChannelLocked(size_t space, size_t channel);
 	bool restartCurrentLocked();
 	bool currentChannelValidLocked();
+	void recoverFailedChannelNoThrow() noexcept;
+	void recoverFailedCloseNoThrow() noexcept;
 
 	std::shared_ptr<const Config> config_;
 	std::shared_ptr<Backend> backend_;

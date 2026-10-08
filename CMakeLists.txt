@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
+cmake_policy(SET CMP0091 NEW)
 project(BonDriver_Userland CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -19,6 +20,21 @@ include(GNUInstallDirs)
 
 option(BUILD_TESTING "Build the test suite" ON)
 option(BONDRIVER_WERROR "Treat warnings as errors" OFF)
+option(BONDRIVER_STATIC_CRT "Use the static MSVC CRT for product DLLs only" OFF)
+option(BONDRIVER_STATIC_CXX_RUNTIME "Statically link GNU-compatible C++/unwind runtimes into Linux DSOs" OFF)
+
+if(BONDRIVER_STATIC_CRT AND NOT MSVC)
+	message(FATAL_ERROR "BONDRIVER_STATIC_CRT is available only with MSVC")
+endif()
+if(BONDRIVER_STATIC_CXX_RUNTIME)
+	if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+		message(FATAL_ERROR "BONDRIVER_STATIC_CXX_RUNTIME requires a GNU/Clang Linux ELF toolchain")
+	endif()
+endif()
+
+if(NOT WIN32)
+	find_package(Threads REQUIRED)
+endif()
 
 add_library(bondriver_common STATIC
 	src/common/Config.cpp
@@ -28,6 +44,7 @@ add_library(bondriver_common STATIC
 	src/common/DebugLog.cpp
 	src/common/ModulePath.cpp
 	src/common/PipelineCommon.cpp
+	src/common/ProcessEnvironment.cpp
 )
 target_include_directories(bondriver_common PUBLIC
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -49,7 +66,7 @@ if(WIN32)
 	target_compile_definitions(bondriver_common PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
 	target_sources(bondriver_common PRIVATE src/common/PipelinePosix.cpp)
-	target_link_libraries(bondriver_common PUBLIC ${CMAKE_DL_LIBS})
+	target_link_libraries(bondriver_common PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 endif()
 
 if(BONDRIVER_WERROR)
@@ -85,6 +102,24 @@ set_target_properties(BonDriver_PX4 PROPERTIES
 	CXX_VISIBILITY_PRESET hidden
 	VISIBILITY_INLINES_HIDDEN YES)
 
+if(BONDRIVER_STATIC_CRT)
+	set(_bondriver_static_crt "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	set_property(TARGET bondriver_common BonDriver_Siano BonDriver_PX4 PROPERTY
+		MSVC_RUNTIME_LIBRARY "${_bondriver_static_crt}")
+endif()
+
+if(BONDRIVER_STATIC_CXX_RUNTIME)
+	# Keep archive and implementation symbols local while preserving the exact
+	# factories and interface RTTI needed for cross-DSO dynamic_cast. These flags
+	# target GNU-compatible libstdc++/libgcc toolchains; acceptance still
+	# requires mixed-runtime tests.
+	foreach(target IN ITEMS BonDriver_Siano BonDriver_PX4)
+		target_link_options(${target} PRIVATE
+			-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL
+			"-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/BonDriver.exports.map")
+	endforeach()
+endif()
+
 if(WIN32)
 	# A .def file keeps CreateBonDriver/CreateBonStruct undecorated on x86 as
 	# well as x64 (x86 cdecl __declspec(dllexport) would decorate them).
@@ -108,6 +143,8 @@ install(FILES
 	DESTINATION ${CMAKE_INSTALL_DATADIR}/BonDriver_Userland)
 
 if(BUILD_TESTING)
+	target_compile_definitions(BonDriver_Siano PRIVATE BONDRIVER_ENABLE_TEST_FAULTS)
+	target_compile_definitions(BonDriver_PX4 PRIVATE BONDRIVER_ENABLE_TEST_FAULTS)
 	enable_testing()
 	add_subdirectory(tests)
 endif()

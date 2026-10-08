@@ -17,6 +17,10 @@
 - `CreateBonDriver()` → RTTI 付き `IBonDriver2` 派生オブジェクトを新規生成
 - `CreateBonStruct()` → EDCB 互換 `STRUCT_IBONDRIVER2`（`const STRUCT_IBONDRIVER*` として返却）
 
+正式な配布対象は Linux x64 / arm64（glibc 2.28 以上または musl 1.2.5 以上）、Windows x64、macOS arm64 です。
+Linux は glibc と musl のどちらも、それぞれの対象 libc/toolchain に対してビルドしてください。古い全 Linux 環境や
+未記載の ABI baseline までの互換性は保証しません。
+
 ## ビルドとテスト
 
 ```sh
@@ -34,8 +38,10 @@ ctest --test-dir build-tests --output-on-failure
 
 - C++17 / CMake。
 - テストは実機・カード・実 daemon に接続しません。`tests/fake_cli` のみを子プロセスとして使います。
-- 実 EDCB の `BonCtrl` ヘッダに対して ABI を検証する追加テストは
-  `-DBONDRIVER_EDCB_INCLUDE_DIR=<EDCB>/BonCtrl` を付けたときに有効になります。
+- glibc 2.28 / musl 1.2.5 の最低バージョンを対象にする場合、対応する sysroot/toolchain でビルドしてください。
+  新しいホスト上で通常ビルドするだけでは古い libc の baseline にはなりません。
+- 再現可能な release build、Linux の任意 static C++ runtime、Windows の任意 static CRT は
+  [docs/release-build.md](docs/release-build.md) を参照してください。
 
 ## 設定
 
@@ -58,7 +64,7 @@ INI のあるディレクトリ基準で解決し、アプリの cwd には依�
 | `kill_timeout_ms` | no | 強制終了後の回収待ち上限（既定 2000） |
 | `buffer_limit_bytes` | no | TS キューの上限（既定 8388608） |
 | `diagnostics` | no | `stderr` / `discard` / `file:PATH`（既定 `stderr`）。`stderr` は子の診断を drain して内部 bounded tail に保持します。`file:` は通常ファイルへ子 stderr を直接追記し、FIFO 等の非通常ファイルは拒否します |
-| `lock_dir` | no | プロセス間 lease のディレクトリ。既定は Linux: `$XDG_RUNTIME_DIR` または `/run`、macOS: `$TMPDIR` または `/tmp`、Windows: `%ProgramData%` 配下。隔離テストは専用ディレクトリを明示します |
+| `lock_dir` | no | プロセス間 lease のディレクトリ。既定は Linux: `$XDG_RUNTIME_DIR` または `/run`、macOS: `$TMPDIR` または `/tmp`、Windows: `%ProgramData%` 配下。隔離テストは専用ディレクトリを明示します。Termux では書込み可能な private directory を設定してください |
 
 ### Siano セクション `[siano]`
 
@@ -172,18 +178,28 @@ INI のあるディレクトリ基準で解決し、アプリの cwd には依�
 
 ## 検証状況
 
-- 正式対象の Linux x64 は Clang 19 common WERROR CTest 31/31、Linux arm64 は GCC 14.2 cross-build と QEMU/PRoot
-  隔離エミュレーションで CTest 31/31（14.67秒）、macOS arm64 は AppleClang 21 CTest 31/31（7.57秒）、
-  Windows x64 は MSVC 19.51 common `/W4 /WX` CTest 31/31（18.55秒）です。Linux x64 ASan/UBSan も
-  `ASAN_OPTIONS=detect_leaks=1` と `UBSAN_OPTIONS=halt_on_error=1` で 31/31 です。
-- release (`BUILD_TESTING=OFF`) は Linux x64、Linux arm64、Windows x64、macOS arm64 で両方の共有ライブラリをビルドしました。
-  Linux arm64 の生成物は ELF `aarch64` と確認済みです。arm64 はQEMU/PRoot上のエミュレーション検証で、実機ネイティブ実行は未実施です。
-- 独立 consumer による ABI 検証では、正式対象の各構成で両バックエンドそれぞれについて、公式に配布された ABI 宣言を使った
-  EDCB C++/struct consumer 79項目と LibISDB consumer 26項目が成功し、失敗・不明はありません。Linux arm64も
-  cross-buildした両backendをエミュレーション実行し、同じ項目が全て成功しました。
-- Windows x86 も追加で検証済みですが、正式対象ではありません。
-- Windows PX4 は、同じ CLI オプションと TS 出力を持つ `px4-ts` の将来提供を前提とします。
-  提供前は実受信未確認です。実測 CNR も未取得です。
-- Linux arm64 の実機ネイティブ実行、実 EDCB / TVTest アプリ本体 / 実機での受入、および将来の Windows PX4 CLI integration は未検証です。
+- 現行の独立 CTest 39件は、Linux glibc 2.28 x64（9.24秒）、Linux glibc 2.28 arm64（QEMU/PRoot、15.04秒）、
+  Alpine Linux musl 1.2.5 x64（9.40秒）、Alpine Linux musl 1.2.5 arm64（QEMU、14.29秒）、macOS arm64 ネイティブ（8.82秒）、
+  Windows x64/MSVC（static CRT、成功）で通過しました。
+- Linux x64 の ASan/UBSan も `ASAN_OPTIONS=detect_leaks=1` と `UBSAN_OPTIONS=halt_on_error=1` で 39/39（6.92秒）でした。
+- `BUILD_TESTING=OFF` の release build は Linux glibc x64/arm64、musl x64/arm64、Windows x64、macOS arm64 で完了しました。
+  独立した動的ランタイム consumer による EDCB ABI 79項目と LibISDB ABI 26項目も、全4 Linux構成の両バックエンドで成功しています。
+- Linux の static C++ runtime を使った両 DSO の load-order/isolation 試験では、native glibc x64、異なる GNU runtime を使う x64 consumer、
+  glibc arm64（QEMU/PRoot）、musl x64（PRoot）、musl arm64（QEMU）で、local/global load、両順序、IBonDriver2 cast と無関係 interface cast の拒否、並行 TS 取得が成功しました。
+  ただし glibc x64 と musl arm64 の PRoot では断続的な process spawn failure が観測されています。直接 loader 実行と raw QEMU 実行は通過しましたが、
+  PRoot failure の原因は未確定です。
+- Linux arm64 は QEMU/PRoot または QEMU による隔離エミュレーション検証です。arm64 実機でのネイティブ実行は未実施です。
+- Windows x64 の static CRT DLL は依存 import が KERNEL32 のみであることを確認しました。通常の動的 CRT を使う独立 consumer でも
+  EDCB ABI 79項目と LibISDB ABI 26項目が成功しています。
+- macOS arm64 は deployment target 11.0 で release build され、現在の macOS 26 上で同じ独立 ABI consumer が成功しました。
+  EDCB ABI 79項目と LibISDB ABI 26項目が成功しています。macOS 11 実機/OS 上での実行は未検証です。
+- Windows x86 も追加検証しましたが、正式な配布対象ではありません。
+- FreeBSD は Zig/Clang 21 による両 DSO の cross compile/link と WERROR が成功しましたが、native build / runtime test は未実施です。
+  さらに両 backend の独立 EDCB/LibISDB consumer translation unit（79/26 assertion suite）が compile しましたが、FreeBSD 上の runtime 実行は未実施です。
+  Termux / Android は compile/runtime とも未検証です。
+  Termux を試す場合は Android API 28 以上を対象にし、`lock_dir` と必要なら `TMPDIR` に書込み可能な private directory を指定してください。
+- Windows PX4 は、将来同じ CLI オプションと TS 出力契約を持つ `px4-ts` が提供されることを前提とする先行対応です。
+  Windows PX4 CLI integration は未検証です。実 EDCB / TVTest アプリ本体、受信機・カード・daemon を使った受入試験も未実施です。
+- CNR は現在の CLI 契約では取得できないため、値は不明です。
 
 ライセンスとコードの出自は [NOTICE](NOTICE) を参照してください。

@@ -1,0 +1,12 @@
+{
+	global:
+		CreateBonDriver;
+		CreateBonStruct;
+		_ZTI10IBonDriver;
+		_ZTS10IBonDriver;
+		_ZTV10IBonDriver;
+		_ZTI11IBonDriver2;
+		_ZTS11IBonDriver2;
+		_ZTV11IBonDriver2;
+	local: *;
+};
