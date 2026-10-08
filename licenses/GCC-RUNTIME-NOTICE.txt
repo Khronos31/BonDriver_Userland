@@ -1,0 +1,19 @@
+GNU compiler runtimes
+=====================
+
+Linux binary packages include unmodified GNU libstdc++ and libgcc runtime
+code linked into the BonDriver shared libraries.
+
+Copyright (C) Free Software Foundation, Inc. and the respective contributors.
+
+These runtime components are licensed under the GNU General Public License,
+version 3 or later, with the GCC Runtime Library Exception, version 3.1.
+The complete texts are supplied as GPL-3.0.txt and GCC-RUNTIME-EXCEPTION.txt.
+The MIT License in the package applies to BonDriver_Userland's own code.
+
+Upstream source and release archives:
+https://gcc.gnu.org/
+https://gcc.gnu.org/releases.html
+https://ftp.gnu.org/gnu/gcc/
+
+The package BUILD-INFO.txt records the compiler and libc used for the build.

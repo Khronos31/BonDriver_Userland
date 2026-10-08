@@ -1,0 +1,134 @@
+name: release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux glibc x64 (2.28)
+            id: linux-glibc-x64
+            runner: ubuntu-24.04
+            libc: glibc
+            arch: x64
+            image: quay.io/pypa/manylinux_2_28_x86_64@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82
+          - name: Linux glibc arm64 (2.28)
+            id: linux-glibc-arm64
+            runner: ubuntu-24.04-arm
+            libc: glibc
+            arch: arm64
+            image: quay.io/pypa/manylinux_2_28_aarch64@sha256:f5f03dedf61b47d69d0742d36047db78adeee3bdb7a9910ff52304750ecf2514
+          - name: Linux musl x64 (1.2.5)
+            id: linux-musl-x64
+            runner: ubuntu-24.04
+            libc: musl
+            arch: x64
+            image: alpine:3.22.6@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
+          - name: Linux musl arm64 (1.2.5)
+            id: linux-musl-arm64
+            runner: ubuntu-24.04-arm
+            libc: musl
+            arch: arm64
+            image: alpine:3.22.6@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
+          - name: Windows x64 MSVC static CRT
+            id: windows-x64
+            runner: windows-2022
+          - name: macOS arm64 (deployment 11.0)
+            id: macos-arm64
+            runner: macos-15
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Select artifact version
+        id: version
+        shell: bash
+        run: bash .github/scripts/write-version.sh
+
+      - name: Build and package Linux target in pinned toolchain image
+        if: startsWith(matrix.id, 'linux-')
+        shell: bash
+        env:
+          LINUX_IMAGE: ${{ matrix.image }}
+          TARGET_LIBC: ${{ matrix.libc }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          BONDRIVER_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker pull "$LINUX_IMAGE"
+          docker run --rm \
+            --entrypoint /bin/sh \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env TARGET_LIBC \
+            --env TARGET_ARCH \
+            --env BONDRIVER_RELEASE_VERSION \
+            --env GITHUB_SHA \
+            "$LINUX_IMAGE" -c '
+              if [ "$TARGET_LIBC" = musl ]; then apk add --no-cache build-base cmake bash python3 binutils; fi
+              bash .github/scripts/build-linux.sh "$TARGET_LIBC" "$TARGET_ARCH" "$BONDRIVER_RELEASE_VERSION"
+            '
+
+      - name: Build and package Windows x64
+        if: matrix.id == 'windows-x64'
+        shell: pwsh
+        env:
+          BONDRIVER_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: .github/scripts/build-windows-release.ps1 -Version $env:BONDRIVER_RELEASE_VERSION
+
+      - name: Build and package macOS arm64
+        if: matrix.id == 'macos-arm64'
+        shell: bash
+        env:
+          BONDRIVER_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: bash .github/scripts/build-macos-release.sh "$BONDRIVER_RELEASE_VERSION"
+
+      - name: Upload platform archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-${{ matrix.id }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish tagged release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Download all six platform archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish immutable release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/publish-release.sh

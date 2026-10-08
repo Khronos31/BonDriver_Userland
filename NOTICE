@@ -4,7 +4,7 @@ Provenance and licensing notice
 This repository (BonDriver_Userland) contains newly written C++17 source,
 build files and tests for shared libraries that drive the siano-userland and
 px4-userland command line tools. It does not bundle any third-party source
-files or headers.
+files or headers. Compiler-runtime license texts are included under licenses/.
 
 ABI compatibility and adapters
 ------------------------------
@@ -38,7 +38,23 @@ Consulted references (read only)
 Names of third-party projects and their trademarks belong to their respective
 owners.
 
-Licensing status
-----------------
-No license is granted for this repository yet. A license must be chosen and
-recorded by the project owner before publication or redistribution.
+Project license
+---------------
+BonDriver_Userland source, build files and tests are licensed under the MIT
+License. See LICENSE for the full terms.
+
+Compiler runtimes in release binaries
+------------------------------------
+Linux release libraries statically include GNU libstdc++ and libgcc runtime
+code, distributed under GPL version 3 or later with the GCC Runtime Library
+Exception version 3.1. Those components retain their own licenses and
+copyrights. Copies of the license, exception and runtime notice accompany
+the binaries under licenses/.
+
+The GCC exception permits independently written modules to use these runtimes
+under their own license. It does not change the MIT license of this project's
+code. See https://www.gnu.org/licenses/gcc-exception-3.1.html and
+https://www.gnu.org/licenses/gcc-exception-3.1-faq.html.
+
+Windows and macOS builds use their platform compiler/runtime distribution
+terms; the MIT grant covers this project's code.

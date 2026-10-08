@@ -79,3 +79,30 @@ static C++ runtime option does not apply to macOS.
 All configurations produce `BonDriver_Siano` and `BonDriver_PX4` shared
 libraries in the build tree. The supported output names are `.so` on Linux,
 `.dll` on Windows, and `.dylib` on macOS.
+
+## GitHub Actions release pipeline
+
+`.github/workflows/release.yml` builds the six supported configurations on
+standard GitHub-hosted runners. Linux builds run inside digest-pinned glibc
+2.28 or Alpine/musl 1.2.5 images after checkout on the host runner; the ARM64
+jobs use native ARM64 runners. Pull requests, pushes to `main`, and manual
+dispatches run the build, tests, release-build checks, and upload CI artifacts.
+
+Each platform job runs all 39 CTests with `BUILD_TESTING=ON`, then builds with
+`BUILD_TESTING=OFF`, places those release libraries into the consumer test
+directory, and runs the 31 applicable non-fault-injection tests against the
+release binaries. Linux jobs also check the ELF architecture, GLIBC 2.28
+symbol-version ceiling (glibc jobs), absence of dynamic libstdc++/libgcc,
+and the exact factory/interface-RTTI export set. Windows checks x64 and the
+static-CRT import boundary; macOS checks arm64, a deployment target of 11.0,
+and system-only dynamic dependencies. Each archive contains both drivers,
+configuration examples, project license files, a `SHA256SUMS` file, and
+`BUILD-INFO.txt` with the source revision and toolchain/runtime details.
+
+Only a pushed semantic version tag (`vMAJOR.MINOR.PATCH`, optionally with
+pre-release/build metadata) can publish a GitHub Release. The publish job waits
+for every matrix configuration, verifies the tag resolves to the checked-out
+commit, requires exactly six platform archives, writes an aggregate
+`SHA256SUMS`, creates a draft release, and publishes it. Existing releases are
+left untouched and cause the job to fail; rerunning a published tag does not
+replace its assets.

@@ -1,5 +1,8 @@
 /build/
 /build-*/
+/.ci-build/
+/.ci-release-stage/
+/artifacts/
 *.o
 *.a
 *.so
