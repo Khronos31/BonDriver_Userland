@@ -8,6 +8,7 @@ endif()
 
 add_executable(test_config test_config.cpp)
 target_link_libraries(test_config PRIVATE bondriver_common)
+target_compile_definitions(test_config PRIVATE BONDRIVER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 add_executable(test_buffer test_buffer.cpp)
 target_link_libraries(test_buffer PRIVATE bondriver_common)
@@ -76,6 +77,31 @@ endforeach()
 # Canonical runtime-path alias contention is a PX4 identity concern only.
 add_test(NAME driver_px4_runtime_alias
 	COMMAND test_driver $<TARGET_FILE:BonDriver_PX4> px4 $<TARGET_FILE:fake_cli> runtime_alias)
+
+# Acceptance: real child process, exact argv, child failure, pool and
+# cross-process exclusivity.  The pool/exclusivity/daemon-control scenarios use
+# fork and are POSIX-only; Windows still builds the same test binary.
+foreach(pair ${BONDRIVER_BACKENDS})
+	string(REPLACE ":" ";" fields ${pair})
+	list(GET fields 0 backend)
+	list(GET fields 1 target)
+	add_test(NAME driver_${backend}_argv_contract_t
+		COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> argv_contract_t)
+	add_test(NAME driver_${backend}_child_failure
+		COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> child_failure)
+	if(NOT WIN32)
+		add_test(NAME driver_${backend}_pool_two_processes
+			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> pool_two_processes)
+		add_test(NAME driver_${backend}_pool_exhaust_release
+			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> pool_exhaust_release)
+		add_test(NAME driver_${backend}_physical_key_labels
+			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> physical_key_labels)
+		add_test(NAME driver_${backend}_no_daemon_control
+			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> no_daemon_control)
+	endif()
+endforeach()
+add_test(NAME driver_px4_argv_contract_s
+	COMMAND test_driver $<TARGET_FILE:BonDriver_PX4> px4 $<TARGET_FILE:fake_cli> argv_contract_s)
 
 add_test(NAME abi_consumer
 	COMMAND abi_consumer $<TARGET_FILE:fake_cli> $<TARGET_FILE:BonDriver_Siano> $<TARGET_FILE:BonDriver_PX4>)

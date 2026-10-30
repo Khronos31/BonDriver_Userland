@@ -84,10 +84,10 @@ struct LibraryState {
 	std::shared_ptr<Backend> backend;
 };
 
-const LibraryState &libraryState(BackendKind kind);
+const LibraryState &libraryState();
 
 // Factory helpers used by the per-backend export translation units.
-IBonDriver2 *createDriverObject(BackendKind kind);
-const STRUCT_IBONDRIVER *createDriverStruct(BackendKind kind);
+IBonDriver2 *createDriverObject();
+const STRUCT_IBONDRIVER *createDriverStruct();
 
 } // namespace bondriver

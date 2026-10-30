@@ -199,6 +199,17 @@ int main(int argc, char **argv)
 	std::signal(SIGPIPE, SIG_IGN);
 #endif
 #endif
+	const char *argv_file = std::getenv("FAKE_ARGV_FILE");
+	if (argv_file != nullptr && *argv_file != '\0') {
+		FILE *argv_output = std::fopen(argv_file, "wb");
+		if (argv_output != nullptr) {
+			for (int i = 0; i < argc; ++i) {
+				std::fwrite(argv[i], 1, std::strlen(argv[i]), argv_output);
+				std::fputc('\n', argv_output);
+			}
+			std::fclose(argv_output);
+		}
+	}
 	const std::string mode = envOr("FAKE_MODE", "stream");
 	const std::string tag = envOr("FAKE_TAG", "");
 	std::string effectiveTag = tag;
@@ -220,6 +231,10 @@ int main(int argc, char **argv)
 		}
 	}
 
+	if (mode == "exit") {
+		sleepMs(envLong("FAKE_EXIT_DELAY_MS", 0));
+		return static_cast<int>(envLong("FAKE_EXIT_CODE", 4));
+	}
 	if (mode == "fail") {
 		std::fprintf(stderr, "fake_cli: deliberate failure\n");
 		return 3;

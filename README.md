@@ -42,67 +42,55 @@ EDCB や TVTest などのアプリケーションで利用する場合は、各�
 
 ### INI ファイルの配置
 
-ライブラリと同じディレクトリに、同一のベース名で拡張子を `.ini` にした設定ファイルを配置します（例: `BonDriver_Siano.so` には `BonDriver_Siano.ini`）。`config/*.example` をコピーして作成してください。
+ライブラリと同じディレクトリに、同一のベース名で拡張子を `.ini` にした設定ファイルを配置します（例: `BonDriver_Siano.so` には `BonDriver_Siano.ini`）。`config/*.example` をコピーして作成してください。現在の実装はモジュールごとに 1 つの `[group.NAME]` を読みます。
 
 INI 内で指定する相対パスは、**INI ファイルが置かれたディレクトリを基準**に解決されます。単純なコマンド名を指定した場合でも PATH 検索は行われず INI からの相対パスとして解決されるため、CLI のパスは絶対パスで指定してください。
 
-#### 最低限必要な共通設定 (`[common]`)
+このライブラリは、既に起動している daemon に `*-ts` クライアントを接続するだけです。daemon の起動・停止・監視は行いません。`*-ts` は shell を介さず argv 配列で起動し、`--instance`、`--receiver`、`--system`、`--freq`（Hz）、`--runtime-dir`、`--output -` を渡します。衛星は `--tsid`（または `--slot`）を渡します。`--frequency-khz` や `--stream-id` は使いません。LNB 15V はまだ設定できません（既定 0V）。
 
-`[common]` セクションでは `tuner_name`、`cli_path`、`channel_table` の 3 つが必須項目です。
+#### `[common]`
+
+`[common]` は任意です。指定できるのは `lock_dir`、`tune_timeout_ms`、`stop_timeout_ms`、`kill_timeout_ms`、`buffer_limit_bytes`、`diagnostics` だけです。`lock_dir` はプロセス間排他用の書き込み可能なディレクトリです。**同じ受信機を参照するすべての BonDriver コピー/INI で同じ `lock_dir` を共有してください。** 省略時は全 INI で同じ既定値になりますが、INI ごとに別の `lock_dir` を指定すると、BonDriver 側の事前排他は共有されません（受信機の競合は daemon の busy 応答まで検出が遅れます）。
 
 ```ini
 [common]
-; アプリケーションへ通知するチューナー名（必須）
-tuner_name = Siano
-
-; 起動するバックエンド CLI の絶対パス（必須、環境に合わせて書き換えてください）
-cli_path = /usr/local/bin/siano-ts
-
-; 使用するチャンネル定義ファイルのパス（必須、INI からの相対パスまたは絶対パス）
-channel_table = BonDriver_Siano.channels.tsv
-
-; （任意）プロセス間排他用ディレクトリ。書き込み可能な場所を指定
 lock_dir = /run/bondriver-userland
+tune_timeout_ms = 10000
+stop_timeout_ms = 5000
+kill_timeout_ms = 2000
+buffer_limit_bytes = 8388608
+diagnostics = stderr
 ```
 
-## 受信機とチャンネル設定の使い方
+#### `[client.NAME]`（実行ファイルと daemon runtime）
 
-### バックエンド別の設定
-
-#### Siano (`[siano]`)
-
-特定のチューナーを固定利用する場合は `device`、複数台から空きを自動確保する場合は `devices`（カンマ区切り）のどちらかを指定します。
+1 つの `*-ts` 実行ファイルと、その daemon の runtime ディレクトリを組にします。`NAME` は設定上のラベルで、製品種別の判定には使いません。`cli_path` と `runtime_dir` は必須です。
 
 ```ini
-[siano]
-; チューナーのセレクター番号（単一指定）
-device = 0
-
-; 任意: ファームウェアのパス
-firmware = /lib/firmware/isdbt_rio.inp
-```
-
-#### PX4 (`[px4]`)
-
-あらかじめ起動している `px4d` のランタイムディレクトリを指定します。
-
-```ini
-[px4]
-; 稼働中 px4d のランタイムディレクトリ（実在するパスが必須）
+[client.px4]
+cli_path = /usr/local/bin/px4-ts
 runtime_dir = /run/px4-userland
-
-; 単一受信機を指定する場合（instance, receiver, systems）
-instance = tok
-receiver = 0
-systems = TS
-
-; 複数受信機をプール利用する場合（receivers でセミコロン区切り列挙）
-; receivers = tok:0:T;tok:1:S;tok:2:TS
-
-; LNB 給電（15V）を行う場合の設定（px4d が --allow-lnb-power で稼働している必要があります）
-lnb_voltage = 0
-allow_lnb_15 = 0
 ```
+
+`runtime_dir` は daemon が動いている間だけ実在すればよく、config 読み込み時に存在しなくても他の client の受信機は使えます。受信機を確保する時点で解決できなければ、その受信機を飛ばして診断ログを出します。
+
+#### `[group.NAME]`（ホストに見せる受信機）
+
+`tuner_name`、`channel_table`、`receivers` が必須です。`receivers` は `client:instance:receiver:systems` をセミコロンで区切ります。
+
+```ini
+[group.PX4]
+tuner_name = PX4
+channel_table = BonDriver_PX4.channels.tsv
+receivers = px4:tok:2:T; px4:tok:3:T; px4:tok:0:S; px4:tok:1:S
+```
+
+- `systems` は `T`、`S`、`TS`。同じ放送方式を受信できる受信機だけを 1 つの group にまとめてください。EDCB では group 内の全 `Count` が同じチャンネル表を持つとみなされます。
+- `instance` は 1..64 ASCII bytes、先頭は英数字、以降は英数字/`_`/`.`/`-`、末尾 `.` 不可、予約名（`con`/`prn`/`aux`/`nul`/`com1..9`/`lpt1..9`）不可です。特定版の source では px4 と pix の product CLI が instance を小文字化し、asicen と torne は保持します。上流で修正中のため恒久契約とは扱わず、実 daemon での再現も未実施です。**例は小文字で統一しています。**
+- 同じ物理受信機は、runtime ディレクトリの実体パス、instance、receiver の組で排他します。client ラベルや group 名を変えても二重確保されません。別製品が同じ runtime root と同じ instance 名を使うと、別の受信機でも排他されるため、製品ごとに runtime_dir を分けてください。この排他は `lock_dir` が同じ場合に限ります。
+- 同名 section の再出現、未知 section、未知キー、未知 client 参照、重複する受信機、複数の `[group.*]` は設定エラーです。
+- EDCB では放送方式ごとに BonDriver を分けてください。現在の実装は 1 ファイル 1 group なので、同じバイナリを `BonDriver_PX4_T` / `BonDriver_PX4_S` などへコピーし、それぞれ別の INI を置きます。TVTest/tsdump は混在 group を使えます。
+- S1UD 2 台の例は、同じ runtime root に sianod を 2 instance 同時起動できることをまだ確認していません。
 
 ### チャンネル定義ファイル (TSV)
 
@@ -113,6 +101,7 @@ allow_lnb_15 = 0
 - 地上波: [config/channels-ground.example.tsv](config/channels-ground.example.tsv)
 - BS / 110度CS: [config/channels-satellite.example.tsv](config/channels-satellite.example.tsv)
 - CATV: [config/channels-catv.example.tsv](config/channels-catv.example.tsv)
+- 地上波 + BS/CS: [config/channels-all.example.tsv](config/channels-all.example.tsv)
 
 ## ソースビルド
 

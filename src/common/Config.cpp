@@ -56,8 +56,7 @@ std::string stripLibraryExtension(const std::string &name)
 	}
 	const std::string ext = name.substr(dot);
 	if (ext == ".so" || ext == ".dylib" || ext == ".dll" || ext == ".bundle") {
-		std::string base = name.substr(0, dot);
-		return base;
+		return name.substr(0, dot);
 	}
 	return name;
 }
@@ -96,7 +95,6 @@ std::string normalizePath(const std::string &path)
 		return path;
 	}
 	std::vector<std::string> parts;
-	// Preserve a leading UNC prefix ("//server/share") instead of collapsing it.
 	std::string prefix;
 	size_t i = 0;
 	if (path.size() >= 2 && path[0] == '/' && path[1] == '/') {
@@ -170,9 +168,6 @@ std::string wideToUtf8(const std::wstring &text)
 }
 #endif
 
-// Resolves an existing directory to its filesystem-canonical absolute path so
-// symlink/junction aliases map to one receiver identity.  Fails when the path
-// cannot be resolved, instead of silently forming a separate lexical identity.
 bool canonicalizeExistingDirectory(const std::string &path, std::string &out, std::string &error)
 {
 #ifdef _WIN32
@@ -252,6 +247,48 @@ bool parseUnsigned(const std::string &text, uint64_t min, uint64_t max, uint64_t
 	return true;
 }
 
+bool isAsciiAlnum(unsigned char c)
+{
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// Shared Core/Siano instance token rules: 1..64 ASCII bytes, start with an
+// alphanumeric, then alphanumeric/_/./-, no trailing dot, no reserved names.
+bool validInstanceToken(const std::string &text)
+{
+	if (text.empty() || text.size() > 64) {
+		return false;
+	}
+	if (!isAsciiAlnum(static_cast<unsigned char>(text[0]))) {
+		return false;
+	}
+	for (size_t i = 1; i < text.size(); ++i) {
+		const unsigned char c = static_cast<unsigned char>(text[i]);
+		if (!(isAsciiAlnum(c) || c == '_' || c == '.' || c == '-')) {
+			return false;
+		}
+	}
+	if (text.back() == '.') {
+		return false;
+	}
+	size_t stem = 0;
+	while (stem < text.size() && text[stem] != '.') {
+		++stem;
+	}
+	std::string folded = text.substr(0, stem);
+	for (char &c : folded) {
+		if (c >= 'A' && c <= 'Z') {
+			c = static_cast<char>(c - 'A' + 'a');
+		}
+	}
+	const bool reserved_word =
+	    folded == "con" || folded == "prn" || folded == "aux" || folded == "nul";
+	const bool reserved_device =
+	    folded.size() == 4 && (folded.compare(0, 3, "com") == 0 || folded.compare(0, 3, "lpt") == 0) &&
+	    folded[3] >= '1' && folded[3] <= '9';
+	return !reserved_word && !reserved_device;
+}
+
 struct IniFile {
 	std::map<std::string, std::map<std::string, std::string>> sections;
 };
@@ -261,6 +298,7 @@ bool parseIni(const std::string &text, IniFile &out, std::string &error)
 	std::istringstream stream(text);
 	std::string line;
 	std::string section = "";
+	std::set<std::string> seen_sections;
 	int line_no = 0;
 	while (std::getline(stream, line)) {
 		++line_no;
@@ -282,6 +320,10 @@ bool parseIni(const std::string &text, IniFile &out, std::string &error)
 				error = "line " + std::to_string(line_no) + ": empty section name";
 				return false;
 			}
+			if (!seen_sections.insert(section).second) {
+				error = "line " + std::to_string(line_no) + ": duplicate section '" + section + "'";
+				return false;
+			}
 			continue;
 		}
 		const size_t eq = stripped.find('=');
@@ -295,7 +337,10 @@ bool parseIni(const std::string &text, IniFile &out, std::string &error)
 			error = "line " + std::to_string(line_no) + ": empty key";
 			return false;
 		}
-		const std::string full = section + "." + key;
+		if (section.empty()) {
+			error = "line " + std::to_string(line_no) + ": key outside a section";
+			return false;
+		}
 		auto &table = out.sections[section];
 		if (table.find(key) != table.end()) {
 			error = "line " + std::to_string(line_no) + ": duplicate key '" + key + "' in [" + section + "]";
@@ -308,9 +353,6 @@ bool parseIni(const std::string &text, IniFile &out, std::string &error)
 
 bool readFile(const std::string &path, std::string &out, std::string &error)
 {
-	// u8path keeps UTF-8 paths intact on Windows (std::ifstream(std::string)
-	// would use the active code page otherwise). POSIX ifstream accepts UTF-8
-	// path bytes directly and avoids GCC 8's separate stdc++fs link dependency.
 #ifdef _WIN32
 	std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
 #else
@@ -368,228 +410,17 @@ std::string getOr(const std::map<std::string, std::string> &table, const std::st
 	return it == table.end() ? def : it->second;
 }
 
-bool parsePx4Target(const std::string &entry, Px4TargetConfig &out, std::string &error)
-{
-	// instance:receiver:systems  (systems is T, S or TS)
-	const size_t c1 = entry.find(':');
-	if (c1 == std::string::npos) {
-		error = "invalid PX4 target '" + entry + "' (expected instance:receiver:systems)";
-		return false;
-	}
-	const size_t c2 = entry.find(':', c1 + 1);
-	if (c2 == std::string::npos) {
-		error = "invalid PX4 target '" + entry + "' (expected instance:receiver:systems)";
-		return false;
-	}
-	out.instance = trim(entry.substr(0, c1));
-	const std::string receiver = trim(entry.substr(c1 + 1, c2 - c1 - 1));
-	const std::string systems = trim(entry.substr(c2 + 1));
-	if (out.instance.empty() || receiver.empty() || systems.empty()) {
-		error = "invalid PX4 target '" + entry + "'";
-		return false;
-	}
-	uint64_t rv = 0;
-	if (!parseUnsigned(receiver, 0, 7, rv)) {
-		error = "PX4 receiver out of range 0..7 in '" + entry + "'";
-		return false;
-	}
-	out.receiver = static_cast<int>(rv);
-	for (char c : systems) {
-		if (c == 'T' || c == 't') {
-			out.supports_t = true;
-		} else if (c == 'S' || c == 's') {
-			out.supports_s = true;
-		} else {
-			error = "invalid system character in PX4 target '" + entry + "'";
-			return false;
-		}
-	}
-	if (!out.supports_t && !out.supports_s) {
-		error = "PX4 target '" + entry + "' supports no system";
-		return false;
-	}
-	return true;
-}
-
-bool loadSiano(const IniFile &ini, const std::string &dir, SianoConfig &out, std::string &error)
-{
-	const std::map<std::string, std::string> empty;
-	const auto *sec = findSection(ini, "siano");
-	const std::map<std::string, std::string> &table = sec ? *sec : empty;
-	if (!checkAllowedKeys(table, {"device", "devices", "firmware"}, "siano", error)) {
-		return false;
-	}
-	const std::string device = getOr(table, "device", "");
-	const std::string devices = getOr(table, "devices", "");
-	if (device.empty() == devices.empty()) {
-		error = "config [siano] requires exactly one of device or devices";
-		return false;
-	}
-	if (!device.empty()) {
-		out.device = device;
-	} else {
-		out.pool_mode = true;
-		out.devices = splitList(devices, ',');
-		if (out.devices.empty()) {
-			error = "config [siano] devices is empty";
-			return false;
-		}
-		std::set<std::string> seen;
-		for (const std::string &d : out.devices) {
-			if (!seen.insert(d).second) {
-				error = "duplicate Siano selector '" + d + "'";
-				return false;
-			}
-		}
-	}
-	const std::string firmware = getOr(table, "firmware", "");
-	if (!firmware.empty()) {
-		out.firmware = joinPath(dir, firmware);
-	}
-	return true;
-}
-
-bool loadPx4(const IniFile &ini, const std::string &dir, Px4Config &out, std::string &error)
-{
-	const std::map<std::string, std::string> empty;
-	const auto *sec = findSection(ini, "px4");
-	const std::map<std::string, std::string> &table = sec ? *sec : empty;
-	if (!checkAllowedKeys(table,
-	                      {"runtime_dir", "instance", "receiver", "receivers", "systems", "lnb_voltage", "allow_lnb_15"},
-	                      "px4", error)) {
-		return false;
-	}
-	const std::string runtime = getOr(table, "runtime_dir", "");
-	if (runtime.empty()) {
-		error = "config [px4] requires runtime_dir";
-		return false;
-	}
-	if (!canonicalizeExistingDirectory(joinPath(dir, runtime), out.runtime_dir, error)) {
-		return false;
-	}
-
-	const std::string instance = getOr(table, "instance", "");
-	const std::string receiver = getOr(table, "receiver", "");
-	const std::string receivers = getOr(table, "receivers", "");
-	const bool fixed_mode = !instance.empty() || !receiver.empty();
-	if (fixed_mode && !receivers.empty()) {
-		error = "config [px4] cannot combine instance/receiver with receivers";
-		return false;
-	}
-	if (!fixed_mode && receivers.empty()) {
-		error = "config [px4] requires instance+receiver or receivers";
-		return false;
-	}
-	if (fixed_mode) {
-		if (instance.empty() || receiver.empty()) {
-			error = "config [px4] fixed mode requires both instance and receiver";
-			return false;
-		}
-		out.fixed.instance = instance;
-		uint64_t rv = 0;
-		if (!parseUnsigned(receiver, 0, 7, rv)) {
-			error = "config [px4] receiver out of range 0..7";
-			return false;
-		}
-		out.fixed.receiver = static_cast<int>(rv);
-		const std::string systems = getOr(table, "systems", "TS");
-		for (char c : systems) {
-			if (c == 'T' || c == 't') {
-				out.fixed.supports_t = true;
-			} else if (c == 'S' || c == 's') {
-				out.fixed.supports_s = true;
-			} else {
-				error = "config [px4] invalid systems '" + systems + "'";
-				return false;
-			}
-		}
-		if (!out.fixed.supports_t && !out.fixed.supports_s) {
-			error = "config [px4] systems is empty";
-			return false;
-		}
-	} else {
-		out.pool_mode = true;
-		for (const std::string &entry : splitList(receivers, ';')) {
-			Px4TargetConfig target;
-			if (!parsePx4Target(entry, target, error)) {
-				return false;
-			}
-			out.targets.push_back(target);
-		}
-		if (out.targets.empty()) {
-			error = "config [px4] receivers is empty";
-			return false;
-		}
-	}
-	{
-		std::set<std::string> seen;
-		const Px4TargetConfig *list = nullptr;
-		size_t count = 0;
-		Px4TargetConfig single;
-		if (out.pool_mode) {
-			list = out.targets.data();
-			count = out.targets.size();
-		} else {
-			single = out.fixed;
-			list = &single;
-			count = 1;
-		}
-		for (size_t i = 0; i < count; ++i) {
-			const std::string key = list[i].instance + "/" + std::to_string(list[i].receiver);
-			if (!seen.insert(key).second) {
-				error = "duplicate PX4 receiver '" + key + "'";
-				return false;
-			}
-		}
-	}
-
-	uint64_t lnb = 0;
-	if (!parseUnsigned(getOr(table, "lnb_voltage", "0"), 0, 15, lnb) || (lnb != 0 && lnb != 15)) {
-		error = "config [px4] lnb_voltage must be 0 or 15";
-		return false;
-	}
-	uint64_t allow = 0;
-	if (!parseUnsigned(getOr(table, "allow_lnb_15", "0"), 0, 1, allow)) {
-		error = "config [px4] allow_lnb_15 must be 0 or 1";
-		return false;
-	}
-	out.lnb_voltage = static_cast<int>(lnb);
-	out.allow_lnb_15 = allow != 0;
-	if (out.lnb_voltage == 15 && !out.allow_lnb_15) {
-		error = "config [px4] lnb_voltage 15 requires allow_lnb_15 = 1";
-		return false;
-	}
-	return true;
-}
-
 bool loadCommon(const IniFile &ini, const std::string &dir, CommonConfig &out, std::string &error)
 {
 	const std::map<std::string, std::string> empty;
 	const auto *sec = findSection(ini, "common");
 	const std::map<std::string, std::string> &table = sec ? *sec : empty;
 	if (!checkAllowedKeys(table,
-	                      {"tuner_name", "cli_path", "channel_table", "lock_dir", "tune_timeout_ms",
-	                       "stop_timeout_ms", "kill_timeout_ms", "buffer_limit_bytes", "diagnostics"},
+	                      {"lock_dir", "tune_timeout_ms", "stop_timeout_ms", "kill_timeout_ms", "buffer_limit_bytes",
+	                       "diagnostics"},
 	                      "common", error)) {
 		return false;
 	}
-	out.tuner_name = getOr(table, "tuner_name", "");
-	out.cli_path = getOr(table, "cli_path", "");
-	const std::string channel_table = getOr(table, "channel_table", "");
-	if (out.tuner_name.empty()) {
-		error = "config [common] requires tuner_name";
-		return false;
-	}
-	if (out.cli_path.empty()) {
-		error = "config [common] requires cli_path";
-		return false;
-	}
-	if (channel_table.empty()) {
-		error = "config [common] requires channel_table";
-		return false;
-	}
-	out.cli_path = joinPath(dir, out.cli_path);
-	out.channel_table = joinPath(dir, channel_table);
 
 	uint64_t v = 0;
 	if (!parseUnsigned(getOr(table, "tune_timeout_ms", "4000"), 1, 3600000, v)) {
@@ -619,22 +450,13 @@ bool loadCommon(const IniFile &ini, const std::string &dir, CommonConfig &out, s
 		error = "config [common] diagnostics must be stderr, discard or file:PATH";
 		return false;
 	}
-	if (out.diagnostics.rfind("file:", 0) == 0) {
-		const std::string file = out.diagnostics.substr(5);
-		if (file.empty()) {
-			error = "config [common] diagnostics file path is empty";
-			return false;
-		}
-		out.diagnostics = "file:" + joinPath(dir, file);
-	}
 
 	const std::string lock_dir = getOr(table, "lock_dir", "");
 	if (lock_dir.empty()) {
 #ifdef _WIN32
 		const std::string program_data = processEnvironmentValue("ProgramData");
-		out.lock_dir = !program_data.empty()
-		                   ? program_data + "/BonDriver_Userland"
-		                   : std::string("C:/ProgramData/BonDriver_Userland");
+		out.lock_dir = !program_data.empty() ? program_data + "/BonDriver_Userland"
+		                                     : std::string("C:/ProgramData/BonDriver_Userland");
 #elif defined(__APPLE__)
 		const char *tmp = std::getenv("TMPDIR");
 		out.lock_dir = (tmp != nullptr && *tmp != '\0') ? std::string(tmp) + "/bondriver-userland"
@@ -645,27 +467,190 @@ bool loadCommon(const IniFile &ini, const std::string &dir, CommonConfig &out, s
 		                                                : std::string("/run/bondriver-userland");
 #endif
 	} else {
-		out.lock_dir = isAbsolutePath(lock_dir) ? normalizePath(lock_dir) : normalizePath(joinPath(dir, lock_dir));
+		out.lock_dir = normalizePath(joinPath(dir, lock_dir));
 	}
 	return true;
 }
 
-bool validateAgainstBackend(const Config &config, std::string &error)
+bool loadClients(const IniFile &ini, const std::string &dir, std::vector<ClientConfig> &out, std::string &error)
+{
+	for (const auto &section : ini.sections) {
+		if (section.first.rfind("client.", 0) != 0) {
+			continue;
+		}
+		const std::string name = section.first.substr(7);
+		if (name.empty()) {
+			error = "empty client label in [" + section.first + "]";
+			return false;
+		}
+		if (name.find(':') != std::string::npos || name.find(';') != std::string::npos) {
+			error = "client label must not contain ':' or ';': [" + section.first + "]";
+			return false;
+		}
+		if (!checkAllowedKeys(section.second, {"cli_path", "runtime_dir"}, section.first, error)) {
+			return false;
+		}
+		ClientConfig client;
+		client.name = name;
+		client.cli_path = getOr(section.second, "cli_path", "");
+		client.runtime_dir = getOr(section.second, "runtime_dir", "");
+		if (client.cli_path.empty()) {
+			error = "config [" + section.first + "] requires cli_path";
+			return false;
+		}
+		if (client.runtime_dir.empty()) {
+			error = "config [" + section.first + "] requires runtime_dir";
+			return false;
+		}
+		client.cli_path = joinPath(dir, client.cli_path);
+		client.runtime_dir = normalizePath(joinPath(dir, client.runtime_dir));
+		out.push_back(std::move(client));
+	}
+	if (out.empty()) {
+		error = "config requires at least one [client.NAME] section";
+		return false;
+	}
+	return true;
+}
+
+bool parseReceiverEntry(const std::string &entry, ReceiverConfig &out, std::string &error)
+{
+	// client:instance:receiver:systems
+	const size_t c1 = entry.find(':');
+	if (c1 == std::string::npos) {
+		error = "invalid receiver '" + entry + "' (expected client:instance:receiver:systems)";
+		return false;
+	}
+	const size_t c2 = entry.find(':', c1 + 1);
+	if (c2 == std::string::npos) {
+		error = "invalid receiver '" + entry + "' (expected client:instance:receiver:systems)";
+		return false;
+	}
+	const size_t c3 = entry.find(':', c2 + 1);
+	if (c3 == std::string::npos) {
+		error = "invalid receiver '" + entry + "' (expected client:instance:receiver:systems)";
+		return false;
+	}
+	out.client = trim(entry.substr(0, c1));
+	out.instance = trim(entry.substr(c1 + 1, c2 - c1 - 1));
+	const std::string receiver = trim(entry.substr(c2 + 1, c3 - c2 - 1));
+	const std::string systems = trim(entry.substr(c3 + 1));
+	if (out.client.empty() || out.instance.empty() || receiver.empty() || systems.empty()) {
+		error = "invalid receiver '" + entry + "'";
+		return false;
+	}
+	if (!validInstanceToken(out.instance)) {
+		error = "invalid instance '" + out.instance + "' in receiver '" + entry + "'";
+		return false;
+	}
+	uint64_t rv = 0;
+	if (!parseUnsigned(receiver, 0, 7, rv)) {
+		error = "receiver out of range 0..7 in '" + entry + "'";
+		return false;
+	}
+	out.receiver = static_cast<int>(rv);
+	for (char c : systems) {
+		if (c == 'T' || c == 't') {
+			out.supports_t = true;
+		} else if (c == 'S' || c == 's') {
+			out.supports_s = true;
+		} else {
+			error = "invalid system character in receiver '" + entry + "'";
+			return false;
+		}
+	}
+	if (!out.supports_t && !out.supports_s) {
+		error = "receiver '" + entry + "' supports no system";
+		return false;
+	}
+	out.hybrid = out.supports_t && out.supports_s;
+	return true;
+}
+
+bool loadGroup(const IniFile &ini, const std::string &dir, const std::vector<ClientConfig> &clients,
+               GroupConfig &out, std::string &error)
+{
+	const std::string *group_section = nullptr;
+	for (const auto &section : ini.sections) {
+		if (section.first.rfind("group.", 0) != 0) {
+			continue;
+		}
+		if (group_section != nullptr) {
+			error = "exactly one [group.NAME] is supported; found '" + *group_section + "' and '" + section.first + "'";
+			return false;
+		}
+		group_section = &section.first;
+	}
+	if (group_section == nullptr) {
+		error = "config requires exactly one [group.NAME] section";
+		return false;
+	}
+	const std::string &name = *group_section;
+	out.name = name.substr(6);
+	if (out.name.empty()) {
+		error = "empty group label in [" + name + "]";
+		return false;
+	}
+	const auto &table = ini.sections.at(name);
+	if (!checkAllowedKeys(table, {"tuner_name", "channel_table", "receivers"}, name, error)) {
+		return false;
+	}
+	out.tuner_name = getOr(table, "tuner_name", "");
+	const std::string channel_table = getOr(table, "channel_table", "");
+	const std::string receivers = getOr(table, "receivers", "");
+	if (out.tuner_name.empty()) {
+		error = "config [" + name + "] requires tuner_name";
+		return false;
+	}
+	if (channel_table.empty()) {
+		error = "config [" + name + "] requires channel_table";
+		return false;
+	}
+	out.channel_table = joinPath(dir, channel_table);
+	if (receivers.empty()) {
+		error = "config [" + name + "] requires receivers";
+		return false;
+	}
+	for (const std::string &entry : splitList(receivers, ';')) {
+		ReceiverConfig receiver;
+		if (!parseReceiverEntry(entry, receiver, error)) {
+			return false;
+		}
+		bool known = false;
+		for (const ClientConfig &c : clients) {
+			if (c.name == receiver.client) {
+				known = true;
+				break;
+			}
+		}
+		if (!known) {
+			error = "receiver '" + entry + "' references unknown client '" + receiver.client + "'";
+			return false;
+		}
+		out.receivers.push_back(receiver);
+	}
+	if (out.receivers.empty()) {
+		error = "config [" + name + "] receivers is empty";
+		return false;
+	}
+	std::set<std::string> seen;
+	for (const ReceiverConfig &r : out.receivers) {
+		const std::string id = r.client + "/" + r.instance + "/" + std::to_string(r.receiver);
+		if (!seen.insert(id).second) {
+			error = "duplicate receiver '" + id + "' in [" + name + "]";
+			return false;
+		}
+	}
+	return true;
+}
+
+bool validateGroup(const Config &config, std::string &error)
 {
 	bool has_t = false;
 	bool has_s = false;
-	if (config.kind == BackendKind::Siano) {
-		has_t = true;
-	} else {
-		if (config.px4.pool_mode) {
-			for (const auto &t : config.px4.targets) {
-				has_t = has_t || t.supports_t;
-				has_s = has_s || t.supports_s;
-			}
-		} else {
-			has_t = config.px4.fixed.supports_t;
-			has_s = config.px4.fixed.supports_s;
-		}
+	for (const ReceiverConfig &r : config.group.receivers) {
+		has_t = has_t || r.supports_t;
+		has_s = has_s || r.supports_s;
 	}
 	for (const Space &space : config.spaces) {
 		for (const ChannelEntry &ch : space.channels) {
@@ -684,6 +669,16 @@ bool validateAgainstBackend(const Config &config, std::string &error)
 
 } // namespace
 
+const ClientConfig *Config::findClient(const std::string &name) const
+{
+	for (const ClientConfig &c : clients) {
+		if (c.name == name) {
+			return &c;
+		}
+	}
+	return nullptr;
+}
+
 bool Config::findChannel(const std::string &id, size_t &space, size_t &channel) const
 {
 	for (size_t s = 0; s < spaces.size(); ++s) {
@@ -698,7 +693,20 @@ bool Config::findChannel(const std::string &id, size_t &space, size_t &channel) 
 	return false;
 }
 
-bool parseChannelTable(const std::string &text, BackendKind kind, std::vector<Space> &out, std::string &error)
+bool canonicalizeRuntimeDir(const std::string &path, std::string &out, std::string &error)
+{
+	return canonicalizeExistingDirectory(path, out, error);
+}
+
+std::string receiverLeaseKey(const std::string &canonical_runtime_dir, const std::string &instance, int receiver)
+{
+	// Length prefixes keep the key unambiguous even if a directory name
+	// contains the separator characters.
+	return "userland:" + std::to_string(canonical_runtime_dir.size()) + ":" + canonical_runtime_dir + "|" +
+	       std::to_string(instance.size()) + ":" + instance + "|" + std::to_string(receiver);
+}
+
+bool parseChannelTable(const std::string &text, std::vector<Space> &out, std::string &error)
 {
 	out.clear();
 	std::istringstream stream(text);
@@ -822,7 +830,6 @@ bool parseChannelTable(const std::string &text, BackendKind kind, std::vector<Sp
 				entry.slot = static_cast<int>(v);
 			}
 		}
-		(void)kind;
 		auto space_it = std::find_if(out.begin(), out.end(), [&](const Space &s) { return s.id == space_id; });
 		if (space_it == out.end()) {
 			Space s;
@@ -840,19 +847,17 @@ bool parseChannelTable(const std::string &text, BackendKind kind, std::vector<Sp
 	return true;
 }
 
-bool loadConfig(BackendKind kind, const std::string &module_path, const std::string &override_path, Config &out,
-                std::string &error)
+bool loadConfig(const std::string &module_path, const std::string &override_path, Config &out, std::string &error)
 {
 	std::string module_dir;
 	std::string module_basename;
 	std::string path = override_path;
 	if (path.empty()) {
-		path = resolveConfigPath(module_path, kind, module_dir, module_basename);
+		path = resolveConfigPath(module_path, module_dir, module_basename);
 	} else {
 		module_dir = dirName(module_path);
 		module_basename = stripLibraryExtension(baseName(module_path));
 	}
-	out.kind = kind;
 	// Relative paths always resolve against the directory of the INI that was
 	// actually loaded, including the test-only explicit override path.
 	out.module_dir = dirName(path);
@@ -867,41 +872,50 @@ bool loadConfig(BackendKind kind, const std::string &module_path, const std::str
 	if (!parseIni(text, ini, error)) {
 		return false;
 	}
+	for (const auto &section : ini.sections) {
+		const std::string &name = section.first;
+		if (name == "common" || name.rfind("client.", 0) == 0 || name.rfind("group.", 0) == 0) {
+			continue;
+		}
+		error = "unknown section [" + name + "]";
+		return false;
+	}
 	if (!loadCommon(ini, module_dir, out.common, error)) {
 		return false;
 	}
-	if (kind == BackendKind::Siano) {
-		if (!loadSiano(ini, module_dir, out.siano, error)) {
+	if (!loadClients(ini, module_dir, out.clients, error)) {
+		return false;
+	}
+	if (!loadGroup(ini, module_dir, out.clients, out.group, error)) {
+		return false;
+	}
+	if (!out.common.diagnostics.empty() && out.common.diagnostics.rfind("file:", 0) == 0) {
+		const std::string file = out.common.diagnostics.substr(5);
+		if (file.empty()) {
+			error = "config [common] diagnostics file path is empty";
 			return false;
 		}
-	} else {
-		if (!loadPx4(ini, module_dir, out.px4, error)) {
-			return false;
-		}
+		out.common.diagnostics = "file:" + joinPath(module_dir, file);
 	}
 	std::string table_text;
-	if (!readFile(out.common.channel_table, table_text, error)) {
+	if (!readFile(out.group.channel_table, table_text, error)) {
 		return false;
 	}
-	if (!parseChannelTable(table_text, kind, out.spaces, error)) {
+	if (!parseChannelTable(table_text, out.spaces, error)) {
 		return false;
 	}
-	if (!validateAgainstBackend(out, error)) {
+	if (!validateGroup(out, error)) {
 		return false;
 	}
 	return true;
 }
 
-std::string resolveConfigPath(const std::string &module_path, BackendKind kind, std::string &module_dir,
+std::string resolveConfigPath(const std::string &module_path, std::string &module_dir,
                               std::string &module_basename)
 {
 	module_dir = dirName(module_path);
 	module_basename = stripLibraryExtension(baseName(module_path));
-	std::string override_env = processEnvironmentValue(kind == BackendKind::Siano ? "BONDRIVER_SIANO_CONFIG"
-	                                                                                : "BONDRIVER_PX4_CONFIG");
-	if (override_env.empty()) {
-		override_env = processEnvironmentValue("BONDRIVER_CONFIG");
-	}
+	const std::string override_env = processEnvironmentValue("BONDRIVER_CONFIG");
 	if (!override_env.empty()) {
 		return normalizePath(override_env);
 	}

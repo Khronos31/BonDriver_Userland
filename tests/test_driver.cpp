@@ -6,6 +6,8 @@
 
 #include <chrono>
 #include <cerrno>
+#include <cstdio>
+#include <filesystem>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -50,6 +52,7 @@ std::string g_lib;
 std::string g_backend;
 bool g_siano = true;
 long g_bufferLimit = 8388608;
+std::string g_receivers;
 
 #ifdef _WIN32
 std::wstring toWideLocal(const std::string &text)
@@ -90,11 +93,7 @@ std::string currentExePath()
 std::string configTextForRuntime(const std::string &runtime_dir)
 {
 	return "[common]\n"
-	       "tuner_name = Test Tuner\n"
-	       "cli_path = " +
-	       g_fakeCli + "\n"
-	                   "channel_table = channels.tsv\n"
-	                   "lock_dir = " +
+	       "lock_dir = " +
 	       g_root + "/locks\n"
 	                "tune_timeout_ms = 800\n"
 	                "stop_timeout_ms = 700\n"
@@ -103,8 +102,10 @@ std::string configTextForRuntime(const std::string &runtime_dir)
 	       std::to_string(g_bufferLimit) +
 	       "\n"
 	       "diagnostics = discard\n"
-	       "[px4]\nruntime_dir = " +
-	       runtime_dir + "\ninstance = tok\nreceiver = 0\nsystems = TS\n";
+	       "[client.main]\ncli_path = " +
+	       g_fakeCli + "\nruntime_dir = " + runtime_dir +
+	       "\n[group.test]\ntuner_name = Test Tuner\nchannel_table = channels.tsv\n"
+	       "receivers = main:tok:0:TS\n";
 }
 
 void setEnv(const char *name, const char *value)
@@ -134,10 +135,6 @@ void setProcessEnvironment(const char *name, const std::string &value)
 std::string configText()
 {
 	std::string common = "[common]\n"
-	                     "tuner_name = Test Tuner\n"
-	                     "cli_path = " +
-	                     g_fakeCli + "\n"
-	                     "channel_table = channels.tsv\n"
 	                     "lock_dir = " +
 	                     g_root + "/locks\n"
 	                     "tune_timeout_ms = 800\n"
@@ -146,11 +143,14 @@ std::string configText()
 	                     "buffer_limit_bytes = " +
 	                     std::to_string(g_bufferLimit) +
 	                     "\n"
-	                     "diagnostics = discard\n";
-	if (g_siano) {
-		return common + "[siano]\ndevice = 0\n";
-	}
-	return common + "[px4]\nruntime_dir = " + g_root + "/runtime\ninstance = tok\nreceiver = 0\nsystems = TS\n";
+	                     "diagnostics = discard\n"
+	                     "[client.main]\ncli_path = " +
+	                     g_fakeCli + "\nruntime_dir = " + g_root + "/runtime\n";
+	const std::string receivers = g_receivers.empty()
+	                                  ? (g_siano ? "main:tok:0:T" : "main:tok:0:TS")
+	                                  : g_receivers;
+	return common + "[group.test]\ntuner_name = Test Tuner\nchannel_table = channels.tsv\nreceivers = " +
+	       receivers + "\n";
 }
 
 std::string tableText()
@@ -236,6 +236,8 @@ int scenarioBasic(const Api &api)
 		testutil::expect(driver->GetTsStream(&data, &size, &remain) == TRUE, "pointer get succeeds");
 		testutil::expect(data != nullptr && size % 188 == 0 && size > 0, "pointer get is packet aligned");
 		testutil::expect(size <= bondriver::kMaxGetTsStreamBytes, "pointer block within public maximum");
+		testutil::expect(data != nullptr && data[0] == 0x47, "pointer get starts with a TS sync byte");
+		testutil::expect(pointerHasTag(data, size, kTag0), "pointer get carries the tuned frequency tag");
 	}
 	{
 		std::vector<BYTE> dst(bondriver::kMaxGetTsStreamBytes + 64, 0xEE);
@@ -461,7 +463,7 @@ int scenarioRuntimeAlias(const Api &api)
 	testutil::writeFile(g_root + "/link.ini", configTextForRuntime(linkDir));
 	const std::string ready = g_root + "/alias-lease-ready";
 	DeleteFileW(toWideLocal(ready).c_str());
-	setEnv("BONDRIVER_PX4_CONFIG", (g_root + "/link.ini").c_str());
+	setEnv("BONDRIVER_CONFIG", (g_root + "/link.ini").c_str());
 	setEnv("FAKE_LEASE_READY", ready.c_str());
 	const std::wstring exe = toWideLocal(g_selfExe);
 	const std::wstring lib = toWideLocal(g_lib);
@@ -483,7 +485,7 @@ int scenarioRuntimeAlias(const Api &api)
 		if (!ready_seen) Sleep(30);
 	}
 	testutil::expect(ready_seen, "junction alias holder acquired receiver");
-	setEnv("BONDRIVER_PX4_CONFIG", (g_root + "/real.ini").c_str());
+	setEnv("BONDRIVER_CONFIG", (g_root + "/real.ini").c_str());
 	IBonDriver2 *parent = api.createDriver();
 	testutil::expect(parent != nullptr, "canonical runtime config loads");
 	if (parent != nullptr) {
@@ -513,7 +515,7 @@ int scenarioRuntimeAlias(const Api &api)
 	const pid_t child = ::fork();
 	if (child == 0) {
 		::close(sync[0]);
-		setEnv("BONDRIVER_PX4_CONFIG", (g_root + "/link.ini").c_str());
+		setEnv("BONDRIVER_CONFIG", (g_root + "/link.ini").c_str());
 		IBonDriver2 *alias = api.createDriver();
 		const char ok = (alias != nullptr && alias->OpenTuner() == TRUE) ? 1 : 0;
 		(void)!::write(sync[1], &ok, 1);
@@ -529,7 +531,7 @@ int scenarioRuntimeAlias(const Api &api)
 	::close(sync[0]);
 	testutil::expect(child_ok == 1, "symlink-alias runtime acquires the lease");
 
-	setEnv("BONDRIVER_PX4_CONFIG", (g_root + "/real.ini").c_str());
+	setEnv("BONDRIVER_CONFIG", (g_root + "/real.ini").c_str());
 	IBonDriver2 *parent = api.createDriver();
 	testutil::expect(parent != nullptr, "canonical runtime config loads");
 	if (parent == nullptr) {
@@ -733,7 +735,9 @@ int scenarioInvalidConfig(const Api &api, const std::string &ini)
 {
 	// Overwrite with an invalid config (missing tuner_name) and expect no object.
 	testutil::writeFile(ini,
-	                    "[common]\ncli_path = " + g_fakeCli + "\nchannel_table = channels.tsv\n[siano]\ndevice = 0\n");
+	                    "[common]\n[client.main]\ncli_path = " + g_fakeCli +
+	                        "\nruntime_dir = " + g_root +
+	                        "/runtime\n[group.test]\nchannel_table = channels.tsv\nreceivers = main:tok:0:TS\n");
 	IBonDriver2 *driver = api.createDriver();
 	testutil::expect(driver == nullptr, "invalid config yields no driver object");
 	const STRUCT_IBONDRIVER *st = api.createStruct();
@@ -751,7 +755,7 @@ int scenarioProcessEnvironment(const Api &api, const std::string &ini)
 	if (pos == std::string::npos) return 1;
 	contents.replace(pos, original.size(), "tuner_name = OS Environment Tuner");
 	testutil::writeFile(alternate, contents);
-	const char *var = g_siano ? "BONDRIVER_SIANO_CONFIG" : "BONDRIVER_PX4_CONFIG";
+	const char *var = "BONDRIVER_CONFIG";
 	setProcessEnvironment(var, alternate);
 	IBonDriver2 *driver = api.createDriver();
 	testutil::expect(driver != nullptr, "factory reads process environment after library load");
@@ -809,8 +813,16 @@ int scenarioThreadStartFailure(const Api &api)
 		const long child_pid = std::strtol(pid_text.c_str(), nullptr, 10);
 #ifdef _WIN32
 		HANDLE child = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(child_pid));
-		const bool child_exited = child != nullptr && WaitForSingleObject(child, 0) == WAIT_OBJECT_0;
-		if (child != nullptr) CloseHandle(child);
+		bool child_exited = false;
+		if (child != nullptr) {
+			for (int wait = 0; wait < 200 && !child_exited; ++wait) {
+				child_exited = WaitForSingleObject(child, 10) == WAIT_OBJECT_0;
+			}
+			CloseHandle(child);
+		} else {
+			// The process object is already gone, so the child has exited.
+			child_exited = GetLastError() == ERROR_INVALID_PARAMETER;
+		}
 #else
 		const bool child_exited = child_pid > 0 && ::kill(static_cast<pid_t>(child_pid), 0) != 0 && errno == ESRCH;
 #endif
@@ -869,8 +881,16 @@ int scenarioThreadStartCleanupFailure(const Api &api)
 		const long child_pid = std::strtol(pid_text.c_str(), nullptr, 10);
 #ifdef _WIN32
 		HANDLE child = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(child_pid));
-		const bool child_exited = child != nullptr && WaitForSingleObject(child, 0) == WAIT_OBJECT_0;
-		if (child != nullptr) CloseHandle(child);
+		bool child_exited = false;
+		if (child != nullptr) {
+			for (int wait = 0; wait < 200 && !child_exited; ++wait) {
+				child_exited = WaitForSingleObject(child, 10) == WAIT_OBJECT_0;
+			}
+			CloseHandle(child);
+		} else {
+			// The process object is already gone, so the child has exited.
+			child_exited = GetLastError() == ERROR_INVALID_PARAMETER;
+		}
 #else
 		const bool child_exited = child_pid > 0 && ::kill(static_cast<pid_t>(child_pid), 0) != 0 && errno == ESRCH;
 #endif
@@ -897,6 +917,399 @@ int scenarioThreadStartCleanupFailure(const Api &api)
 	}
 	return 0;
 }
+
+
+std::vector<std::string> readArgv(const std::string &path)
+{
+	std::vector<std::string> out;
+	const std::string text = testutil::readFile(path);
+	size_t start = 0;
+	while (start < text.size()) {
+		const size_t end = text.find('\n', start);
+		out.push_back(text.substr(start, end == std::string::npos ? std::string::npos : end - start));
+		if (end == std::string::npos) {
+			break;
+		}
+		start = end + 1;
+	}
+	return out;
+}
+
+std::string canonicalPath(const std::string &path)
+{
+	std::error_code ec;
+	const std::filesystem::path canonical = std::filesystem::canonical(std::filesystem::u8path(path), ec);
+	return ec ? path : canonical.string();
+}
+
+bool samePath(const std::string &a, const std::string &b)
+{
+	std::string left = a;
+	std::string right = b;
+	for (char &c : left) {
+		if (c == '\\') c = '/';
+	}
+	for (char &c : right) {
+		if (c == '\\') c = '/';
+	}
+#ifdef _WIN32
+	for (char &c : left) {
+		if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+	}
+	for (char &c : right) {
+		if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+	}
+#endif
+	return left == right;
+}
+
+bool waitForFile(const std::string &path)
+{
+	for (int i = 0; i < 200 && testutil::readFile(path).empty(); ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	return !testutil::readFile(path).empty();
+}
+
+int scenarioArgvContract(const Api &api, bool satellite)
+{
+	testutil::expect(!satellite || !g_siano, "satellite argv contract requires a receiver that supports isdb-s");
+	if (satellite && g_siano) {
+		return 0;
+	}
+	const std::string argv_file = g_root + "/argv.txt";
+	::remove(argv_file.c_str());
+	setEnv("FAKE_ARGV_FILE", argv_file.c_str());
+	setEnv("FAKE_MODE", "stream");
+	setEnv("FAKE_TAG", satellite ? "1100000000" : kTag0.c_str());
+	IBonDriver2 *driver = api.createDriver();
+	testutil::expect(driver != nullptr, "argv contract driver created");
+	if (driver == nullptr) {
+		return 1;
+	}
+	testutil::expect(driver->OpenTuner() == TRUE, "argv contract open");
+	testutil::expect(driver->SetChannel(satellite ? 1 : 0, 0) == TRUE, "argv contract tune");
+	testutil::expect(waitForFile(argv_file), "fake recorded argv");
+	const std::vector<std::string> argv = readArgv(argv_file);
+	std::vector<std::string> expected;
+	expected.push_back(g_fakeCli);
+	expected.push_back("--instance");
+	expected.push_back("tok");
+	expected.push_back("--receiver");
+	expected.push_back("0");
+	expected.push_back("--system");
+	expected.push_back(satellite ? "isdb-s" : "isdb-t");
+	expected.push_back("--freq");
+	expected.push_back(satellite ? "1100000000" : "473142857");
+	expected.push_back("--runtime-dir");
+	expected.push_back(canonicalPath(g_root + "/runtime"));
+	expected.push_back("--output");
+	expected.push_back("-");
+	if (satellite) {
+		expected.push_back("--tsid");
+		expected.push_back("1");
+	}
+	bool matches = argv.size() == expected.size();
+	for (size_t i = 0; matches && i < argv.size(); ++i) {
+		matches = i == 10 ? samePath(argv[i], expected[i]) : argv[i] == expected[i];
+	}
+	testutil::expect(matches, "argv matches the common *-ts contract exactly");
+	driver->CloseTuner();
+	driver->Release();
+	setEnv("FAKE_ARGV_FILE", nullptr);
+	return 0;
+}
+
+int scenarioChildFailure(const Api &api)
+{
+	IBonDriver2 *driver = api.createDriver();
+	testutil::expect(driver != nullptr, "child-failure driver created");
+	if (driver == nullptr) {
+		return 1;
+	}
+	testutil::expect(driver->OpenTuner() == TRUE, "child-failure open");
+	setEnv("FAKE_MODE", "exit");
+	setEnv("FAKE_EXIT_CODE", "4");
+	testutil::expect(driver->SetChannel(0, 0) == FALSE, "child exit before TS fails the tune");
+	testutil::expect(driver->GetCurChannel() == BONDRIVER_CHANNEL_INVALID,
+	                 "failed child leaves no current channel");
+	driver->CloseTuner();
+	IBonDriver2 *next = api.createDriver();
+	testutil::expect(next != nullptr, "second driver after failed child");
+	if (next != nullptr) {
+		testutil::expect(next->OpenTuner() == TRUE, "receiver lease is released after normal close");
+		setEnv("FAKE_MODE", "stream");
+		setEnv("FAKE_TAG", "child-failure-recovery");
+		testutil::expect(next->SetChannel(0, 0) == TRUE, "receiver can be reopened after child failure");
+		testutil::expect(next->WaitTsStream(2000) == 0, "reopened receiver produces TS");
+		next->Release();
+	}
+	driver->Release();
+	setEnv("FAKE_EXIT_CODE", nullptr);
+	return 0;
+}
+
+#ifndef _WIN32
+int scenarioPoolTwoProcesses(const Api &api)
+{
+	int to_parent[2];
+	int to_child[2];
+	if (::pipe(to_parent) != 0 || ::pipe(to_child) != 0) {
+		return 1;
+	}
+	const pid_t child = ::fork();
+	if (child == 0) {
+		::close(to_parent[0]);
+		::close(to_child[1]);
+		const std::string child_argv = g_root + "/argv-child.txt";
+		const std::string child_pid_file = g_root + "/child-fake.pid";
+		setEnv("FAKE_ARGV_FILE", child_argv.c_str());
+		setEnv("FAKE_PID_FILE", child_pid_file.c_str());
+		setEnv("FAKE_MODE", "stream");
+		setEnv("FAKE_TAG", "child-stream");
+		IBonDriver2 *d = api.createDriver();
+		char ok = 0;
+		if (d != nullptr && d->OpenTuner() == TRUE && d->SetChannel(0, 0) == TRUE &&
+		    d->WaitTsStream(2000) == 0) {
+			ok = 1;
+		}
+		(void)!::write(to_parent[1], &ok, 1);
+		char go = 0;
+		if (::read(to_child[0], &go, 1) != 1) {
+			::_exit(1);
+		}
+		// The parent has closed and released its own receiver.  This process
+		// must keep its child and stream.
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		char alive = 0;
+		if (d != nullptr) {
+			const long fake_pid = std::strtol(testutil::readFile(child_pid_file).c_str(), nullptr, 10);
+			const bool producer_alive = fake_pid > 0 && ::kill(static_cast<pid_t>(fake_pid), 0) == 0;
+			BYTE *data = nullptr;
+			DWORD size = 0;
+			DWORD remain = 0;
+			const bool stream_alive =
+			    d->WaitTsStream(1000) == 0 && d->GetTsStream(&data, &size, &remain) == TRUE &&
+			    data != nullptr && pointerHasTag(data, size, "child-stream");
+			alive = (producer_alive && stream_alive) ? 1 : 0;
+		}
+		(void)!::write(to_parent[1], &alive, 1);
+		if (d != nullptr) {
+			d->CloseTuner();
+			d->Release();
+		}
+		::_exit(0);
+	}
+	::close(to_parent[1]);
+	::close(to_child[0]);
+
+	const std::string parent_argv = g_root + "/argv-parent.txt";
+	setEnv("FAKE_ARGV_FILE", parent_argv.c_str());
+	setEnv("FAKE_MODE", "stream");
+	setEnv("FAKE_TAG", kTag0.c_str());
+	IBonDriver2 *parent = api.createDriver();
+	testutil::expect(parent != nullptr, "pool parent driver created");
+	if (parent != nullptr) {
+		testutil::expect(parent->OpenTuner() == TRUE, "pool parent opens");
+		testutil::expect(parent->SetChannel(0, 0) == TRUE, "pool parent tunes");
+		testutil::expect(parent->WaitTsStream(2000) == 0, "pool parent gets TS");
+	}
+	char child_ok = 0;
+	(void)!::read(to_parent[0], &child_ok, 1);
+	testutil::expect(child_ok == 1, "second process gets a different receiver");
+	testutil::expect(waitForFile(parent_argv) && waitForFile(g_root + "/argv-child.txt"),
+	                 "both processes recorded argv");
+	const std::vector<std::string> parent_args = readArgv(parent_argv);
+	const std::vector<std::string> child_args = readArgv(g_root + "/argv-child.txt");
+	auto receiver_of = [](const std::vector<std::string> &args) {
+		for (size_t i = 0; i + 1 < args.size(); ++i) {
+			if (args[i] == "--receiver") {
+				return args[i + 1];
+			}
+		}
+		return std::string();
+	};
+	const std::string parent_receiver = receiver_of(parent_args);
+	const std::string child_receiver = receiver_of(child_args);
+	testutil::expect(!parent_receiver.empty() && !child_receiver.empty(),
+	                 "both processes report a receiver");
+	testutil::expect(parent_receiver != child_receiver, "pool processes hold distinct receivers");
+	if (parent != nullptr) {
+		parent->CloseTuner();
+		parent->Release();
+	}
+	const char go = 1;
+	(void)!::write(to_child[1], &go, 1);
+	char child_alive = 0;
+	(void)!::read(to_parent[0], &child_alive, 1);
+	testutil::expect(child_alive == 1, "closing one process does not stop the other stream");
+	::close(to_parent[0]);
+	::close(to_child[1]);
+	int status = 0;
+	::waitpid(child, &status, 0);
+	return 0;
+}
+
+int scenarioPoolExhaustRelease(const Api &api)
+{
+	int to_parent[2];
+	int to_child[2];
+	if (::pipe(to_parent) != 0 || ::pipe(to_child) != 0) {
+		return 1;
+	}
+	const pid_t child = ::fork();
+	if (child == 0) {
+		::close(to_parent[0]);
+		::close(to_child[1]);
+		setEnv("FAKE_MODE", "stream");
+		setEnv("FAKE_TAG", "exhaust-child");
+		IBonDriver2 *d = api.createDriver();
+		char ok = (d != nullptr && d->OpenTuner() == TRUE) ? 1 : 0;
+		(void)!::write(to_parent[1], &ok, 1);
+		char release = 0;
+		if (::read(to_child[0], &release, 1) != 1) {
+			::_exit(1);
+		}
+		if (d != nullptr) {
+			d->CloseTuner();
+		}
+		char released = 1;
+		(void)!::write(to_parent[1], &released, 1);
+		char quit = 0;
+		(void)!::read(to_child[0], &quit, 1);
+		if (d != nullptr) {
+			d->Release();
+		}
+		::_exit(0);
+	}
+	::close(to_parent[1]);
+	::close(to_child[0]);
+	char child_ok = 0;
+	(void)!::read(to_parent[0], &child_ok, 1);
+	testutil::expect(child_ok == 1, "first process acquires the only receiver");
+	IBonDriver2 *parent = api.createDriver();
+	testutil::expect(parent != nullptr, "exhaust parent driver created");
+	if (parent != nullptr) {
+		testutil::expect(parent->OpenTuner() == FALSE, "second process cannot claim the only receiver");
+	}
+	const char release = 1;
+	(void)!::write(to_child[1], &release, 1);
+	char released = 0;
+	(void)!::read(to_parent[0], &released, 1);
+	testutil::expect(released == 1, "first process closed normally");
+	if (parent != nullptr) {
+		testutil::expect(parent->OpenTuner() == TRUE, "normal close releases the receiver to another process");
+		parent->Release();
+	}
+	const char quit = 1;
+	(void)!::write(to_child[1], &quit, 1);
+	::close(to_parent[0]);
+	::close(to_child[1]);
+	int status = 0;
+	::waitpid(child, &status, 0);
+	return 0;
+}
+
+int scenarioPhysicalKeyLabels(const Api &api)
+{
+	std::string other = configTextForRuntime(g_root + "/runtime");
+	const std::string from_client = "[client.main]";
+	const size_t client_at = other.find(from_client);
+	if (client_at != std::string::npos) {
+		other.replace(client_at, from_client.size(), "[client.other]");
+	}
+	const std::string from_group = "[group.test]";
+	const size_t group_at = other.find(from_group);
+	if (group_at != std::string::npos) {
+		other.replace(group_at, from_group.size(), "[group.other]");
+	}
+	const std::string from_receiver = "receivers = main:tok:0:TS";
+	const size_t receiver_at = other.find(from_receiver);
+	if (receiver_at != std::string::npos) {
+		other.replace(receiver_at, from_receiver.size(), "receivers = other:tok:0:TS");
+	}
+	other.replace(other.find("tuner_name = Test Tuner"), std::string("tuner_name = Test Tuner").size(),
+	              "tuner_name = Other Tuner");
+	const std::string other_ini = g_root + "/other.ini";
+	testutil::writeFile(other_ini, other);
+
+	int sync[2];
+	if (::pipe(sync) != 0) {
+		return 1;
+	}
+	const pid_t child = ::fork();
+	if (child == 0) {
+		::close(sync[0]);
+		setEnv("BONDRIVER_CONFIG", other_ini.c_str());
+		IBonDriver2 *holder = api.createDriver();
+		const char ok = (holder != nullptr && holder->OpenTuner() == TRUE) ? 1 : 0;
+		(void)!::write(sync[1], &ok, 1);
+		for (;;) {
+			::pause();
+		}
+	}
+	::close(sync[1]);
+	char child_ok = 0;
+	(void)!::read(sync[0], &child_ok, 1);
+	::close(sync[0]);
+	testutil::expect(child_ok == 1, "different-label client acquires the receiver");
+	setEnv("BONDRIVER_CONFIG", (g_root + "/config.ini").c_str());
+	IBonDriver2 *parent = api.createDriver();
+	testutil::expect(parent != nullptr, "main-label client loads");
+	if (parent != nullptr) {
+		testutil::expect(parent->OpenTuner() == FALSE,
+		                 "same endpoint under a different client label is still exclusive");
+	}
+	::kill(child, SIGKILL);
+	int status = 0;
+	::waitpid(child, &status, 0);
+	if (parent != nullptr) {
+		testutil::expect(parent->OpenTuner() == TRUE, "main-label client acquires after holder exit");
+		parent->Release();
+	}
+	return 0;
+}
+
+int scenarioNoDaemonControl(const Api &api)
+{
+	const char *shims[] = {"px4d", "px4ctl", "sianod", "sianoctl"};
+	for (const char *name : shims) {
+		const std::string marker = g_root + "/" + name + ".called";
+		const std::string path = g_root + "/" + name;
+		testutil::writeFile(path, "#!/bin/sh\ntouch '" + marker + "'\nexit 0\n");
+		::chmod(path.c_str(), 0755);
+	}
+	const std::string old_path = std::getenv("PATH") != nullptr ? std::getenv("PATH") : "";
+	setEnv("PATH", (g_root + ":" + old_path).c_str());
+
+	const pid_t daemon = ::fork();
+	if (daemon == 0) {
+		for (;;) {
+			::pause();
+		}
+	}
+	IBonDriver2 *driver = api.createDriver();
+	testutil::expect(driver != nullptr, "no-daemon-control driver created");
+	if (driver != nullptr) {
+		testutil::expect(driver->OpenTuner() == TRUE, "no-daemon-control open");
+		setEnv("FAKE_MODE", "stream");
+		setEnv("FAKE_TAG", "no-daemon-control");
+		testutil::expect(driver->SetChannel(0, 0) == TRUE, "no-daemon-control tune");
+		driver->CloseTuner();
+		driver->Release();
+	}
+	testutil::expect(::kill(daemon, 0) == 0, "Close does not signal an unrelated process in the group");
+	for (const char *name : shims) {
+		testutil::expect(testutil::readFile(g_root + "/" + name + ".called").empty(),
+		                 std::string("daemon/control shim was not invoked: ") + name);
+	}
+	::kill(daemon, SIGKILL);
+	int status = 0;
+	::waitpid(daemon, &status, 0);
+	setEnv("PATH", old_path.c_str());
+	return 0;
+}
+#endif
 
 } // namespace
 
@@ -957,6 +1370,12 @@ int main(int argc, char **argv)
 		g_bufferLimit = 188 * 20;
 	} else if (scenario == "multiple_buffers") {
 		g_bufferLimit = 8 * 1024 * 1024;
+	} else if (scenario == "pool_two_processes") {
+		g_receivers = g_siano ? "main:tok:0:T;main:tok:1:T" : "main:tok:0:TS;main:tok:1:TS";
+	} else if (scenario == "pool_exhaust_release") {
+		g_receivers = g_siano ? "main:tok:0:T" : "main:tok:0:TS";
+	} else if (scenario == "child_failure") {
+		g_receivers = g_siano ? "main:tok:0:T;main:tok:1:T" : "main:tok:0:TS;main:tok:1:TS";
 	}
 	g_root = testutil::tempRoot() + "-driver-" + scenario + "-" + std::to_string(processId());
 	testutil::makeDir(testutil::tempRoot());
@@ -965,7 +1384,7 @@ int main(int argc, char **argv)
 	testutil::writeFile(g_root + "/channels.tsv", tableText());
 	const std::string ini = g_root + "/config.ini";
 	testutil::writeFile(ini, configText());
-	setEnv(g_siano ? "BONDRIVER_SIANO_CONFIG" : "BONDRIVER_PX4_CONFIG", ini.c_str());
+	setEnv("BONDRIVER_CONFIG", ini.c_str());
 
 	int rc = 0;
 	if (scenario == "basic") {
@@ -1002,6 +1421,22 @@ int main(int argc, char **argv)
 		rc = scenarioRuntimeAlias(api);
 	} else if (scenario == "cleanup_failure") {
 		rc = scenarioCleanupFailure(api);
+	} else if (scenario == "argv_contract_t") {
+		rc = scenarioArgvContract(api, false);
+	} else if (scenario == "argv_contract_s") {
+		rc = scenarioArgvContract(api, true);
+	} else if (scenario == "child_failure") {
+		rc = scenarioChildFailure(api);
+#ifndef _WIN32
+	} else if (scenario == "pool_two_processes") {
+		rc = scenarioPoolTwoProcesses(api);
+	} else if (scenario == "pool_exhaust_release") {
+		rc = scenarioPoolExhaustRelease(api);
+	} else if (scenario == "physical_key_labels") {
+		rc = scenarioPhysicalKeyLabels(api);
+	} else if (scenario == "no_daemon_control") {
+		rc = scenarioNoDaemonControl(api);
+#endif
 	} else {
 		testutil::expect(false, "unknown scenario " + scenario);
 		rc = 1;
