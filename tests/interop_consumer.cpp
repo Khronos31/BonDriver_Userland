@@ -121,12 +121,15 @@ int main(int argc, char **argv)
 	          "GR\tGR\tT13\tT13\tisdb-t\t473142857\t-\t-\n"
 	          "BS\tBS\tBS01_0\tBS01_0\tisdb-s\t1100000000\t1\t-\n");
 	writeFile(root + "/siano.ini",
-	          "[common]\ntuner_name = Siano Tuner\ncli_path = " + fakeCli +
-	              "\nchannel_table = siano-flowers.tsv\nlock_dir = " + root + "/siano-locks\ndiagnostics = discard\n[siano]\ndevice = 0\n");
+	          "[common]\nlock_dir = " + root + "/siano-locks\ndiagnostics = discard\n"
+	          "[client.main]\ncli_path = " + fakeCli + "\nruntime_dir = " + root +
+	              "/runtime\n[group.test]\ntuner_name = Siano Tuner\n"
+	              "channel_table = siano-flowers.tsv\nreceivers = main:tok:0:T\n");
 	writeFile(root + "/px4.ini",
-	          "[common]\ntuner_name = PX4 Tuner\ncli_path = " + fakeCli +
-	              "\nchannel_table = px4.tsv\nlock_dir = " + root + "/px4-locks\ndiagnostics = discard\n[px4]\nruntime_dir = " +
-	              root + "/runtime\ninstance = tok\nreceiver = 0\nsystems = TS\n");
+	          "[common]\nlock_dir = " + root + "/px4-locks\ndiagnostics = discard\n"
+	          "[client.main]\ncli_path = " + fakeCli + "\nruntime_dir = " + root +
+	              "/runtime\n[group.test]\ntuner_name = PX4 Tuner\n"
+	              "channel_table = px4.tsv\nreceivers = main:tok:0:TS\n");
 
 	void *siano = libOpen(argv[2]);
 	void *px4 = libOpen(argv[3]);
@@ -142,10 +145,9 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	setEnv("BONDRIVER_SIANO_CONFIG", (root + "/siano.ini").c_str());
-	setEnv("BONDRIVER_PX4_CONFIG", (root + "/px4.ini").c_str());
-
+	setEnv("BONDRIVER_CONFIG", (root + "/siano.ini").c_str());
 	IBonDriver2 *s = sianoCreate();
+	setEnv("BONDRIVER_CONFIG", (root + "/px4.ini").c_str());
 	IBonDriver2 *p = px4Create();
 	expect(s != nullptr && p != nullptr, "both factories create objects");
 	if (s != nullptr) {

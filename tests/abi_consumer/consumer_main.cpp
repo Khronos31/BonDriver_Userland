@@ -118,7 +118,7 @@ void testLibrary(const std::string &lib, const std::string &configPath, bool isS
 	auto createStruct = reinterpret_cast<CreateStructFn>(libSym(handle, "CreateBonStruct"));
 	expect(createDriver != nullptr, "CreateBonDriver symbol");
 	expect(createStruct != nullptr, "CreateBonStruct symbol");
-	setEnv(isSiano ? "BONDRIVER_SIANO_CONFIG" : "BONDRIVER_PX4_CONFIG", configPath.c_str());
+	setEnv("BONDRIVER_CONFIG", configPath.c_str());
 
 	IBonDriver2 *driver2 = createDriver();
 	expect(driver2 != nullptr, "CreateBonDriver object");
@@ -170,11 +170,14 @@ int main(int argc, char **argv)
 	          "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
 	          "GR\tGR\tT13\tT13\tisdb-t\t473142857\t-\t-\n"
 	          "BS\tBS\tBS01_0\tBS01_0\tisdb-s\t1100000000\t1\t-\n");
-	const std::string sianoIni = "[common]\ntuner_name = ABI Tuner\ncli_path = " + fakeCli +
-	                             "\nchannel_table = siano-flowers.tsv\ndiagnostics = discard\n[siano]\ndevice = 0\n";
-	const std::string px4Ini = "[common]\ntuner_name = ABI Tuner\ncli_path = " + fakeCli +
-	                           "\nchannel_table = px4.tsv\ndiagnostics = discard\n[px4]\nruntime_dir = " + root +
-	                           "/runtime\ninstance = tok\nreceiver = 0\nsystems = TS\n";
+	const std::string sianoIni = "[common]\ndiagnostics = discard\n[client.main]\ncli_path = " + fakeCli +
+	                             "\nruntime_dir = " + root +
+	                             "/runtime\n[group.test]\ntuner_name = ABI Tuner\n"
+	                             "channel_table = siano-flowers.tsv\nreceivers = main:tok:0:T\n";
+	const std::string px4Ini = "[common]\ndiagnostics = discard\n[client.main]\ncli_path = " + fakeCli +
+	                           "\nruntime_dir = " + root +
+	                           "/runtime\n[group.test]\ntuner_name = ABI Tuner\n"
+	                           "channel_table = px4.tsv\nreceivers = main:tok:0:TS\n";
 	writeFile(root + "/siano.ini", sianoIni);
 	writeFile(root + "/px4.ini", px4Ini);
 

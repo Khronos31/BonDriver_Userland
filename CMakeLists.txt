@@ -80,7 +80,7 @@ endif()
 # Shared libraries.  No "lib" prefix so EDCB/TVTest load the documented names.
 add_library(BonDriver_Siano SHARED
 	src/common/DriverCore.cpp
-	src/siano/SianoBackend.cpp
+	src/common/UserlandBackend.cpp
 	src/siano/exports.cpp
 )
 target_link_libraries(BonDriver_Siano PRIVATE bondriver_common)
@@ -92,7 +92,7 @@ set_target_properties(BonDriver_Siano PROPERTIES
 
 add_library(BonDriver_PX4 SHARED
 	src/common/DriverCore.cpp
-	src/px4/Px4Backend.cpp
+	src/common/UserlandBackend.cpp
 	src/px4/exports.cpp
 )
 target_link_libraries(BonDriver_PX4 PRIVATE bondriver_common)
@@ -140,6 +140,7 @@ install(FILES
 	config/channels-ground.example.tsv
 	config/channels-satellite.example.tsv
 	config/channels-catv.example.tsv
+	config/channels-all.example.tsv
 	DESTINATION ${CMAKE_INSTALL_DATADIR}/BonDriver_Userland)
 
 if(BUILD_TESTING)

@@ -107,7 +107,7 @@ DriverCore::DriverCore(std::shared_ptr<const Config> config, std::shared_ptr<Bac
 		std::lock_guard<std::mutex> pl(pipeline_.mutex());
 		pipeline_.buffer().setLimit(config_->common.buffer_limit_bytes);
 	}
-	tuner_name_ = utf8ToUtf16(config_->common.tuner_name);
+	tuner_name_ = utf8ToUtf16(config_->group.tuner_name);
 	for (const Space &space : config_->spaces) {
 		space_names_.push_back(utf8ToUtf16(space.name.empty() ? space.id : space.name));
 		std::vector<std::u16string> channels;
@@ -209,12 +209,18 @@ bool DriverCore::claimTargetLocked(bool want_t, bool want_s)
 				continue;
 			}
 			std::string err;
-			if (lease_.acquire(lockPathFor(lock_dir, target.key), err)) {
+			ReceiverTarget candidate = target;
+			if (!canonicalizeRuntimeDir(target.runtime_dir, candidate.runtime_dir, err)) {
+				logLine(backend_->tag(), "receiver skipped: " + err);
+				continue;
+			}
+			candidate.key = receiverLeaseKey(candidate.runtime_dir, candidate.instance, candidate.receiver);
+			if (lease_.acquire(lockPathFor(lock_dir, candidate.key), err)) {
 				try {
 #ifdef BONDRIVER_ENABLE_TEST_FAULTS
 					if (!processEnvironmentValue("BONDRIVER_FAULT_AFTER_LEASE").empty()) throw std::bad_alloc();
 #endif
-					target_ = target;
+					target_ = candidate;
 				} catch (...) {
 					lease_.release();
 					throw;
@@ -649,15 +655,15 @@ const DWORD DriverCore::GetCurChannel(void) try
 }
 catch (...) { return BONDRIVER_CHANNEL_INVALID; }
 
-const LibraryState &libraryState(BackendKind kind)
+const LibraryState &libraryState()
 {
 	static LibraryState state;
 	static std::once_flag once;
-	std::call_once(once, [kind]() {
+	std::call_once(once, []() {
 		const std::string module_path = currentModulePath();
 		auto config = std::make_shared<Config>();
 		std::string error;
-		if (!loadConfig(kind, module_path, "", *config, error)) {
+		if (!loadConfig(module_path, "", *config, error)) {
 			state.valid = false;
 			state.error = error;
 			logLine("bondriver", "configuration error: " + error);
@@ -670,12 +676,12 @@ const LibraryState &libraryState(BackendKind kind)
 	return state;
 }
 
-IBonDriver2 *createDriverObject(BackendKind kind) try
+IBonDriver2 *createDriverObject() try
 {
 #ifdef BONDRIVER_ENABLE_TEST_FAULTS
 	if (!processEnvironmentValue("BONDRIVER_FAULT_FACTORY").empty()) throw std::bad_alloc();
 #endif
-	const LibraryState &state = libraryState(kind);
+	const LibraryState &state = libraryState();
 	if (!state.valid) {
 		logLine("bondriver", "CreateBonDriver failed: " + state.error);
 		return nullptr;
@@ -711,12 +717,12 @@ catch (...) {}
 
 } // namespace
 
-const STRUCT_IBONDRIVER *createDriverStruct(BackendKind kind) try
+const STRUCT_IBONDRIVER *createDriverStruct() try
 {
 #ifdef BONDRIVER_ENABLE_TEST_FAULTS
 	if (!processEnvironmentValue("BONDRIVER_FAULT_FACTORY").empty()) throw std::bad_alloc();
 #endif
-	const LibraryState &state = libraryState(kind);
+	const LibraryState &state = libraryState();
 	if (!state.valid) {
 		logLine("bondriver", "CreateBonStruct failed: " + state.error);
 		return nullptr;

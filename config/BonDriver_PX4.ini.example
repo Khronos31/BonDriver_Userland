@@ -1,30 +1,29 @@
-; BonDriver_PX4 sample configuration.
+; BonDriver_PX4 sample configuration (common client form).
 ; Copy to the directory containing BonDriver_PX4.so/.dll/.dylib and rename it
 ; to BonDriver_PX4.ini.  Relative paths resolve against this file's directory.
+; Exactly one [group.NAME] is accepted per file.
 
 [common]
-tuner_name = PX4
-cli_path = /usr/local/bin/px4-ts
-channel_table = BonDriver_PX4.channels.tsv
+lock_dir = /run/bondriver-userland
 tune_timeout_ms = 10000
 stop_timeout_ms = 5000
 kill_timeout_ms = 2000
 buffer_limit_bytes = 8388608
 diagnostics = stderr
 
-[px4]
-; Directory of the running px4d runtime (canonicalised).
+; One executable + daemon runtime namespace.  The label is not a product type.
+[client.px4]
+; Absolute path recommended.  The CLI is started with argv, never a shell.
+cli_path = /usr/local/bin/px4-ts
+; Directory shared with the already-running px4d.  The daemon is not started
+; or stopped by this library.
 runtime_dir = /run/px4-userland
 
-; Fixed form: one instance + one receiver + its systems (T, S or TS).
-instance = tok
-receiver = 0
-systems = TS
-
-; Pool form (choose a free receiver; dedicated before hybrid):
-; receivers = tok:0:T;tok:1:S;tok:2:TS
-
-; LNB voltage is off by default. Setting 15 additionally requires
-; allow_lnb_15 = 1 and a daemon started with --allow-lnb-power.
-lnb_voltage = 0
-allow_lnb_15 = 0
+; Receivers this host exposes to the application.
+; receivers = client:instance:receiver:systems
+; systems is T, S or TS.  instance must be 1..64 ASCII [0-9A-Za-z_.-],
+; start with a letter/digit, and should be lowercase for px4.
+[group.PX4]
+tuner_name = PX4
+channel_table = BonDriver_PX4.channels.tsv
+receivers = px4:tok:2:T; px4:tok:3:T; px4:tok:0:S; px4:tok:1:S
