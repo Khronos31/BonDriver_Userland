@@ -1,13 +1,13 @@
-; BonDriver_Userland sample configuration.
-; Copy this file next to BonDriver_Userland.so/.dll/.dylib as
-; BonDriver_Userland.ini.  Relative paths resolve against this file's directory.
+; BonDriver_Userland 設定例
+; 本ファイルを BonDriver_Userland.so/.dll/.dylib と同じディレクトリに
+; BonDriver_Userland.ini としてコピーして使用する。相対パスは本ファイルの配置ディレクトリを基準に解決される。
 ;
-; The library itself is one binary.  For EDCB, copy the same binary to
-; BonDriver_Userland_T / _S / _TS (and to _T_0 etc. for Proxy) and give each
-; copy a different basename; the basename selects one [group.NAME] here.
+; ライブラリ本体は 1 バイナリである。EDCB では同一バイナリを BonDriver_Userland_T / _S / _TS
+; （Proxy では _T_0 等）へ別名で実体コピーして配置する。モジュールの basename に応じて
+; 本設定内の対応する [group.NAME] が選択される。
 ;
-; All BonDriver copies/INI that reference the same receiver must share the same
-; lock_dir.  A different lock_dir disables cross-INI pre-exclusion.
+; 同一の受信機を参照するすべての BonDriver コピー / INI で同じ lock_dir を共有すること。
+; lock_dir が異なるとモジュール間の事前排他が機能しなくなる。
 [common]
 lock_dir = /run/bondriver-userland
 tune_timeout_ms = 10000
@@ -16,8 +16,8 @@ kill_timeout_ms = 2000
 buffer_limit_bytes = 8388608
 diagnostics = stderr
 
-; A client is one *-ts executable and one daemon runtime namespace.  The label
-; is not a product type; it is only the name used by receivers below.
+; client は 1 つの *-ts 実行ファイルと 1 つの daemon runtime 名前空間の組を定義する。
+; ラベル名は製品種別の判定には使われず、下の receivers から参照される識別名である。
 [client.px4]
 cli_path = /usr/local/bin/px4-ts
 runtime_dir = /run/px4-userland
@@ -34,39 +34,36 @@ runtime_dir = /run/asicen-userland
 cli_path = /usr/local/bin/pix-ts
 runtime_dir = /run/pix-userland
 
-; torne is a planned client: torne-ts / receiver 0 / ISDB-T only.  The daemon
-; listener and real reception are not implemented yet, so this group does not
-; work until torne-userland gains them.
+; torne クライアント（torne-ts / receiver 0 / ISDB-T のみ）
 [client.torne]
 cli_path = /usr/local/bin/torne-ts
 runtime_dir = /run/torne-userland
 
-; T12 / S8 / TS3 = 23 receivers.  This is a representative combination, not a
-; verified all-at-once operation.  Use lowercase instance tokens.
+; T12 / S8 / TS3 = 計 23 チューナーの代表構成例。instance は小文字で指定すること。
 ; receivers = client:instance:receiver:systems
 
-; Terrestrial-only group (12).  EDCB Count = 12.
+; 地デジ専用グループ（12）。EDCB Count = 12。
 [group.BonDriver_Userland_T]
 tuner_name = Userland-T
 channel_table = channels-ground.example.tsv
 receivers = siano:s1ud_a:0:T; siano:s1ud_b:0:T; px4:q3u4:2:T; px4:q3u4:3:T; px4:q3u4:6:T; px4:q3u4:7:T; px4:s1ur:0:T; asicen:w3u3:1:T; asicen:w3u3:3:T; asicen:w3u2:1:T; asicen:w3u2:3:T; torne:torne0:0:T
 
-; BS/110-degree CS-only group (8).  EDCB Count = 8.
+; BS/110度CS専用グループ（8）。EDCB Count = 8。
 [group.BonDriver_Userland_S]
 tuner_name = Userland-S
 channel_table = channels-satellite.example.tsv
 receivers = px4:q3u4:0:S; px4:q3u4:1:S; px4:q3u4:4:S; px4:q3u4:5:S; asicen:w3u3:0:S; asicen:w3u3:2:S; asicen:w3u2:0:S; asicen:w3u2:2:S
 
-; T/S hybrid group (3).  EDCB Count = 3.  Do not also count these receivers
-; in the T or S groups.
+; 地デジ/BS/CS兼用グループ（3）。EDCB Count = 3。
+; これらのチューナーを T や S のグループに重複して含めないこと。
 [group.BonDriver_Userland_TS]
 tuner_name = Userland-TS
 channel_table = channels-all.example.tsv
 receivers = px4:m1ur:0:TS; pix:dt181:0:TS; pix:dt295:0:TS
 
-; TVTest/tsdump group with all 23 receivers.  EDCB should use the T/S/TS groups
-; above instead, because EDCB assumes every Count in one group can receive every
-; channel in that group's table.
+; TVTest / tsdump 向け（全 23 チューナー）。
+; EDCB では同一グループ内の全チューナーが同一のチャンネル表を処理できる必要があるため、
+; 上記の T / S / TS グループを使用すること。
 [group.BonDriver_Userland]
 tuner_name = Userland
 channel_table = channels-all.example.tsv

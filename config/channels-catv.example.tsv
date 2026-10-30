@@ -1,4 +1,4 @@
-# CATV accepts arbitrary centre frequencies (Hz). Capability depends on the tuner.
+# CATV 設定例（任意の中心周波数を Hz 単位で指定。受信可否はチューナーの性能に依存する）。
 space_id	space_name	channel_id	channel_name	system	frequency_hz	stream_id	slot
 CATV	CATV	C13	CATV-C13	isdb-t	111000000	-	-
 CATV	CATV	C14	CATV-C14	isdb-t	117000000	-	-

@@ -1,4 +1,4 @@
-# space_id, space_name, channel_id, channel_name, system, frequency_hz, stream_id, slot
+# 地上波設定例（列定義: 空間ID, 空間名, チャンネルID, 表示名, 放送方式, 中心周波数Hz, ストリームID, スロット番号）
 space_id	space_name	channel_id	channel_name	system	frequency_hz	stream_id	slot
 GR	地上波	T13	T13	isdb-t	473142000	-	-
 GR	地上波	T14	T14	isdb-t	479142000	-	-
