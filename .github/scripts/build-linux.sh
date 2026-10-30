@@ -33,8 +33,8 @@ cmake -S "$repo_root" -B "$test_dir" \
 	-DCMAKE_BUILD_TYPE=Release
 cmake --build "$test_dir" --parallel 2
 registered="$(ctest --test-dir "$test_dir" -N | awk '/Total Tests:/ { print $3 }')"
-if [[ "$registered" != 39 ]]; then
-	echo "expected 39 registered tests, found ${registered:-none}" >&2
+if [[ "$registered" != 52 ]]; then
+	echo "expected 52 registered tests, found ${registered:-none}" >&2
 	exit 1
 fi
 ctest --test-dir "$test_dir" --output-on-failure
@@ -95,8 +95,8 @@ done
 
 excluded='driver_(siano|px4)_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
 registered="$(ctest --test-dir "$test_dir" -N --exclude-regex "$excluded" | awk '/Total Tests:/ { print $3 }')"
-if [[ "$registered" != 31 ]]; then
-	echo "expected 31 release-DSO tests, found ${registered:-none}" >&2
+if [[ "$registered" != 48 ]]; then
+	echo "expected 48 release-DSO tests, found ${registered:-none}" >&2
 	exit 1
 fi
 cp "$release_dir/BonDriver_Siano.so" "$test_dir/BonDriver_Siano.so"

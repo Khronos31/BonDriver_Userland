@@ -45,7 +45,7 @@ function Assert-CtestCount([string]$BuildDir, [int]$Expected, [string]$Exclude =
 Invoke-Checked 'cmake' @('-S', $repo, '-B', $testBuild, '-DBUILD_TESTING=ON',
     '-DBONDRIVER_WERROR=ON', '-DBONDRIVER_STATIC_CRT=ON')
 Invoke-Checked 'cmake' @('--build', $testBuild, '--config', 'Release', '--parallel', '2')
-Assert-CtestCount $testBuild 39
+Assert-CtestCount $testBuild 52
 Invoke-Checked 'ctest' @('--test-dir', $testBuild, '-C', 'Release', '--output-on-failure')
 
 Invoke-Checked 'cmake' @('-S', $repo, '-B', $releaseBuild, '-DBUILD_TESTING=OFF',
@@ -72,7 +72,7 @@ foreach ($name in @('BonDriver_Siano.dll', 'BonDriver_PX4.dll')) {
 }
 
 $excluded = 'driver_(siano|px4)_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
-Assert-CtestCount $testBuild 31 $excluded
+Assert-CtestCount $testBuild 48 $excluded
 Invoke-Checked 'ctest' @('--test-dir', $testBuild, '-C', 'Release', '--output-on-failure', '-E', $excluded)
 
 $stage = Join-Path $repo '.ci-release-stage/windows-x64'
