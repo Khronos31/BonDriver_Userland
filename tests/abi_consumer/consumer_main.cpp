@@ -107,7 +107,7 @@ void *libSym(void *handle, const char *name)
 #endif
 }
 
-void testLibrary(const std::string &lib, const std::string &configPath, bool isSiano)
+void testLibrary(const std::string &lib, const std::string &configPath)
 {
 	void *handle = libOpen(lib);
 	expect(handle != nullptr, "open " + lib);
@@ -150,8 +150,8 @@ void testLibrary(const std::string &lib, const std::string &configPath, bool isS
 
 int main(int argc, char **argv)
 {
-	expect(argc >= 4, "usage: consumer FAKE_CLI SIANO_LIB PX4_LIB");
-	if (argc < 4) {
+	expect(argc >= 3, "usage: consumer FAKE_CLI LIB");
+	if (argc < 3) {
 		return 1;
 	}
 	const std::string fakeCli = argv[1];
@@ -163,26 +163,17 @@ int main(int argc, char **argv)
 	mkdir(root.c_str(), 0755);
 	mkdir((root + "/runtime").c_str(), 0755);
 #endif
-	writeFile(root + "/siano-flowers.tsv",
-	          "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
-	          "GR\tGR\tT13\tT13\tisdb-t\t473142857\t-\t-\n");
-	writeFile(root + "/px4.tsv",
+	writeFile(root + "/channels.tsv",
 	          "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
 	          "GR\tGR\tT13\tT13\tisdb-t\t473142857\t-\t-\n"
 	          "BS\tBS\tBS01_0\tBS01_0\tisdb-s\t1100000000\t1\t-\n");
-	const std::string sianoIni = "[common]\ndiagnostics = discard\n[client.main]\ncli_path = " + fakeCli +
-	                             "\nruntime_dir = " + root +
-	                             "/runtime\n[group.test]\ntuner_name = ABI Tuner\n"
-	                             "channel_table = siano-flowers.tsv\nreceivers = main:tok:0:T\n";
-	const std::string px4Ini = "[common]\ndiagnostics = discard\n[client.main]\ncli_path = " + fakeCli +
+	const std::string config = "[common]\ndiagnostics = discard\n[client.main]\ncli_path = " + fakeCli +
 	                           "\nruntime_dir = " + root +
-	                           "/runtime\n[group.test]\ntuner_name = ABI Tuner\n"
-	                           "channel_table = px4.tsv\nreceivers = main:tok:0:TS\n";
-	writeFile(root + "/siano.ini", sianoIni);
-	writeFile(root + "/px4.ini", px4Ini);
+	                           "/runtime\n[group.BonDriver_Userland]\ntuner_name = ABI Tuner\n"
+	                           "channel_table = channels.tsv\nreceivers = main:tok:0:TS\n";
+	writeFile(root + "/config.ini", config);
 
-	testLibrary(argv[2], root + "/siano.ini", true);
-	testLibrary(argv[3], root + "/px4.ini", false);
+	testLibrary(argv[2], root + "/config.ini");
 
 	if (g_failures == 0) {
 		std::fprintf(stderr, "PASS: abi_consumer\n");

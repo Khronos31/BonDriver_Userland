@@ -1,4 +1,4 @@
-LIBRARY BonDriver_PX4
+LIBRARY BonDriver_Userland
 EXPORTS
     CreateBonDriver
     CreateBonStruct

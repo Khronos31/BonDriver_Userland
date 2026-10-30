@@ -104,7 +104,7 @@ std::string configTextForRuntime(const std::string &runtime_dir)
 	       "diagnostics = discard\n"
 	       "[client.main]\ncli_path = " +
 	       g_fakeCli + "\nruntime_dir = " + runtime_dir +
-	       "\n[group.test]\ntuner_name = Test Tuner\nchannel_table = channels.tsv\n"
+	       "\n[group.BonDriver_Userland]\ntuner_name = Test Tuner\nchannel_table = channels.tsv\n"
 	       "receivers = main:tok:0:TS\n";
 }
 
@@ -149,7 +149,7 @@ std::string configText()
 	const std::string receivers = g_receivers.empty()
 	                                  ? (g_siano ? "main:tok:0:T" : "main:tok:0:TS")
 	                                  : g_receivers;
-	return common + "[group.test]\ntuner_name = Test Tuner\nchannel_table = channels.tsv\nreceivers = " +
+	return common + "[group.BonDriver_Userland]\ntuner_name = Test Tuner\nchannel_table = channels.tsv\nreceivers = " +
 	       receivers + "\n";
 }
 
@@ -737,7 +737,7 @@ int scenarioInvalidConfig(const Api &api, const std::string &ini)
 	testutil::writeFile(ini,
 	                    "[common]\n[client.main]\ncli_path = " + g_fakeCli +
 	                        "\nruntime_dir = " + g_root +
-	                        "/runtime\n[group.test]\nchannel_table = channels.tsv\nreceivers = main:tok:0:TS\n");
+	                        "/runtime\n[group.BonDriver_Userland]\nchannel_table = channels.tsv\nreceivers = main:tok:0:TS\n");
 	IBonDriver2 *driver = api.createDriver();
 	testutil::expect(driver == nullptr, "invalid config yields no driver object");
 	const STRUCT_IBONDRIVER *st = api.createStruct();
@@ -1217,11 +1217,6 @@ int scenarioPhysicalKeyLabels(const Api &api)
 	const size_t client_at = other.find(from_client);
 	if (client_at != std::string::npos) {
 		other.replace(client_at, from_client.size(), "[client.other]");
-	}
-	const std::string from_group = "[group.test]";
-	const size_t group_at = other.find(from_group);
-	if (group_at != std::string::npos) {
-		other.replace(group_at, from_group.size(), "[group.other]");
 	}
 	const std::string from_receiver = "receivers = main:tok:0:TS";
 	const size_t receiver_at = other.find(from_receiver);

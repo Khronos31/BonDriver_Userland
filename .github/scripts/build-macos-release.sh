@@ -17,8 +17,8 @@ cmake -S "$repo_root" -B "$test_dir" \
 	-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
 cmake --build "$test_dir" --parallel 2
 registered="$(ctest --test-dir "$test_dir" -N | awk '/Total Tests:/ { print $3 }')"
-if [[ "$registered" != 52 ]]; then
-	echo "expected 52 registered tests, found ${registered:-none}" >&2
+if [[ "$registered" != 30 ]]; then
+	echo "expected 30 registered tests, found ${registered:-none}" >&2
 	exit 1
 fi
 ctest --test-dir "$test_dir" --output-on-failure
@@ -29,7 +29,7 @@ cmake -S "$repo_root" -B "$release_dir" \
 	-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
 cmake --build "$release_dir" --parallel 2
 
-for lib in BonDriver_Siano.dylib BonDriver_PX4.dylib; do
+for lib in BonDriver_Userland.dylib; do
 	path="$release_dir/$lib"
 	if [[ "$(lipo -archs "$path")" != arm64 ]]; then
 		echo "unexpected architecture in $path" >&2
@@ -55,13 +55,12 @@ for lib in BonDriver_Siano.dylib BonDriver_PX4.dylib; do
 	done < <(otool -L "$path" | tail -n +2 | sed -E 's/^[[:space:]]*//; s/ \(compatibility.*$//')
 done
 
-excluded='driver_(siano|px4)_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
+excluded='driver_userland_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
 registered="$(ctest --test-dir "$test_dir" -N --exclude-regex "$excluded" | awk '/Total Tests:/ { print $3 }')"
-if [[ "$registered" != 44 ]]; then
-	echo "expected 44 release-DSO tests, found ${registered:-none}" >&2
+if [[ "$registered" != 26 ]]; then
+	echo "expected 26 release-DSO tests, found ${registered:-none}" >&2
 	exit 1
 fi
-cp "$release_dir/BonDriver_Siano.dylib" "$test_dir/BonDriver_Siano.dylib"
-cp "$release_dir/BonDriver_PX4.dylib" "$test_dir/BonDriver_PX4.dylib"
+cp "$release_dir/BonDriver_Userland.dylib" "$test_dir/BonDriver_Userland.dylib"
 ctest --test-dir "$test_dir" --output-on-failure --exclude-regex "$excluded"
 bash "$repo_root/.github/scripts/package-release.sh" macos-arm64 "$release_dir" tar.gz

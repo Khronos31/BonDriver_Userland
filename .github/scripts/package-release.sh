@@ -33,13 +33,12 @@ case "$platform" in
 esac
 
 files=(
-	"BonDriver_Siano.$extension"
-	"BonDriver_PX4.$extension"
-	"config/BonDriver_Siano.ini.example"
-	"config/BonDriver_PX4.ini.example"
+	"BonDriver_Userland.$extension"
+	"config/BonDriver_Userland.ini.example"
 	"config/channels-ground.example.tsv"
 	"config/channels-satellite.example.tsv"
 	"config/channels-catv.example.tsv"
+	"config/channels-all.example.tsv"
 	"README.md"
 	"docs/release-build.md"
 	"LICENSE"
@@ -47,17 +46,17 @@ files=(
 	"BUILD-INFO.txt"
 )
 project_files=(
-	"config/BonDriver_Siano.ini.example"
-	"config/BonDriver_PX4.ini.example"
+	"config/BonDriver_Userland.ini.example"
 	"config/channels-ground.example.tsv"
 	"config/channels-satellite.example.tsv"
 	"config/channels-catv.example.tsv"
+	"config/channels-all.example.tsv"
 	"README.md"
 	"docs/release-build.md"
 	"LICENSE"
 	"NOTICE"
 )
-for file in "${files[@]:0:2}"; do
+for file in "${files[@]:0:1}"; do
 	if [[ ! -f "$build_dir/$file" ]]; then
 		echo "required release library missing: $build_dir/$file" >&2
 		exit 1
@@ -73,8 +72,7 @@ copy_into_stage() {
 	mkdir -p "$(dirname "$stage/$2")"
 	cp "$1" "$stage/$2"
 }
-copy_into_stage "$build_dir/BonDriver_Siano.$extension" "BonDriver_Siano.$extension"
-copy_into_stage "$build_dir/BonDriver_PX4.$extension" "BonDriver_PX4.$extension"
+copy_into_stage "$build_dir/BonDriver_Userland.$extension" "BonDriver_Userland.$extension"
 for file in "${project_files[@]}"; do
 	copy_into_stage "$repo_root/$file" "$file"
 done

@@ -77,34 +77,24 @@ if(BONDRIVER_WERROR)
 	endif()
 endif()
 
-# Shared libraries.  No "lib" prefix so EDCB/TVTest load the documented names.
-add_library(BonDriver_Siano SHARED
+# The single shared library.  Hosts that need several simultaneously-selectable
+# objects copy the same binary to another BonDriver_Userland* name; the module
+# basename selects a [group.NAME] inside BonDriver_Userland.ini.
+add_library(BonDriver_Userland SHARED
 	src/common/DriverCore.cpp
 	src/common/UserlandBackend.cpp
-	src/siano/exports.cpp
+	src/exports.cpp
 )
-target_link_libraries(BonDriver_Siano PRIVATE bondriver_common)
-set_target_properties(BonDriver_Siano PROPERTIES
+target_link_libraries(BonDriver_Userland PRIVATE bondriver_common)
+set_target_properties(BonDriver_Userland PROPERTIES
 	PREFIX ""
-	OUTPUT_NAME "BonDriver_Siano"
-	CXX_VISIBILITY_PRESET hidden
-	VISIBILITY_INLINES_HIDDEN YES)
-
-add_library(BonDriver_PX4 SHARED
-	src/common/DriverCore.cpp
-	src/common/UserlandBackend.cpp
-	src/px4/exports.cpp
-)
-target_link_libraries(BonDriver_PX4 PRIVATE bondriver_common)
-set_target_properties(BonDriver_PX4 PROPERTIES
-	PREFIX ""
-	OUTPUT_NAME "BonDriver_PX4"
+	OUTPUT_NAME "BonDriver_Userland"
 	CXX_VISIBILITY_PRESET hidden
 	VISIBILITY_INLINES_HIDDEN YES)
 
 if(BONDRIVER_STATIC_CRT)
 	set(_bondriver_static_crt "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-	set_property(TARGET bondriver_common BonDriver_Siano BonDriver_PX4 PROPERTY
+	set_property(TARGET bondriver_common BonDriver_Userland PROPERTY
 		MSVC_RUNTIME_LIBRARY "${_bondriver_static_crt}")
 endif()
 
@@ -113,30 +103,25 @@ if(BONDRIVER_STATIC_CXX_RUNTIME)
 	# factories and interface RTTI needed for cross-DSO dynamic_cast. These flags
 	# target GNU-compatible libstdc++/libgcc toolchains; acceptance still
 	# requires mixed-runtime tests.
-	foreach(target IN ITEMS BonDriver_Siano BonDriver_PX4)
-		target_link_options(${target} PRIVATE
-			-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL
-			"-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/BonDriver.exports.map")
-	endforeach()
+	target_link_options(BonDriver_Userland PRIVATE
+		-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL
+		"-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/BonDriver.exports.map")
 endif()
 
 if(WIN32)
 	# A .def file keeps CreateBonDriver/CreateBonStruct undecorated on x86 as
 	# well as x64 (x86 cdecl __declspec(dllexport) would decorate them).
-	target_sources(BonDriver_Siano PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BonDriver_Siano.def)
-	target_compile_definitions(BonDriver_Siano PRIVATE BONDRIVER_USING_DEF)
-	target_sources(BonDriver_PX4 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BonDriver_PX4.def)
-	target_compile_definitions(BonDriver_PX4 PRIVATE BONDRIVER_USING_DEF)
+	target_sources(BonDriver_Userland PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BonDriver_Userland.def)
+	target_compile_definitions(BonDriver_Userland PRIVATE BONDRIVER_USING_DEF)
 endif()
 
-install(TARGETS BonDriver_Siano BonDriver_PX4
+install(TARGETS BonDriver_Userland
 	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES
-	config/BonDriver_Siano.ini.example
-	config/BonDriver_PX4.ini.example
+	config/BonDriver_Userland.ini.example
 	config/channels-ground.example.tsv
 	config/channels-satellite.example.tsv
 	config/channels-catv.example.tsv
@@ -144,8 +129,7 @@ install(FILES
 	DESTINATION ${CMAKE_INSTALL_DATADIR}/BonDriver_Userland)
 
 if(BUILD_TESTING)
-	target_compile_definitions(BonDriver_Siano PRIVATE BONDRIVER_ENABLE_TEST_FAULTS)
-	target_compile_definitions(BonDriver_PX4 PRIVATE BONDRIVER_ENABLE_TEST_FAULTS)
+	target_compile_definitions(BonDriver_Userland PRIVATE BONDRIVER_ENABLE_TEST_FAULTS)
 	enable_testing()
 	add_subdirectory(tests)
 endif()
