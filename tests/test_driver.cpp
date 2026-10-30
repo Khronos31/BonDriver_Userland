@@ -813,8 +813,13 @@ int scenarioThreadStartFailure(const Api &api)
 		const long child_pid = std::strtol(pid_text.c_str(), nullptr, 10);
 #ifdef _WIN32
 		HANDLE child = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(child_pid));
-		const bool child_exited = child != nullptr && WaitForSingleObject(child, 0) == WAIT_OBJECT_0;
-		if (child != nullptr) CloseHandle(child);
+		bool child_exited = false;
+		if (child != nullptr) {
+			for (int wait = 0; wait < 200 && !child_exited; ++wait) {
+				child_exited = WaitForSingleObject(child, 10) == WAIT_OBJECT_0;
+			}
+			CloseHandle(child);
+		}
 #else
 		const bool child_exited = child_pid > 0 && ::kill(static_cast<pid_t>(child_pid), 0) != 0 && errno == ESRCH;
 #endif
@@ -873,8 +878,13 @@ int scenarioThreadStartCleanupFailure(const Api &api)
 		const long child_pid = std::strtol(pid_text.c_str(), nullptr, 10);
 #ifdef _WIN32
 		HANDLE child = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(child_pid));
-		const bool child_exited = child != nullptr && WaitForSingleObject(child, 0) == WAIT_OBJECT_0;
-		if (child != nullptr) CloseHandle(child);
+		bool child_exited = false;
+		if (child != nullptr) {
+			for (int wait = 0; wait < 200 && !child_exited; ++wait) {
+				child_exited = WaitForSingleObject(child, 10) == WAIT_OBJECT_0;
+			}
+			CloseHandle(child);
+		}
 #else
 		const bool child_exited = child_pid > 0 && ::kill(static_cast<pid_t>(child_pid), 0) != 0 && errno == ESRCH;
 #endif
