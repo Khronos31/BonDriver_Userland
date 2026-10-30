@@ -89,6 +89,8 @@ receivers = px4:tok:2:T; px4:tok:3:T; px4:tok:0:S; px4:tok:1:S
 - `instance` は 1..64 ASCII bytes、先頭は英数字、以降は英数字/`_`/`.`/`-`、末尾 `.` 不可、予約名（`con`/`prn`/`aux`/`nul`/`com1..9`/`lpt1..9`）不可です。px4/asicen/torne の現行 CLI は instance を小文字化するため、**小文字で指定してください**。
 - 同じ物理受信機は、runtime ディレクトリの実体パス、instance、receiver の組で排他します。client ラベルや group 名を変えても二重確保されません。別製品が同じ runtime root と同じ instance 名を使うと、別の受信機でも排他されるため、製品ごとに runtime_dir を分けてください。
 - 同名 section の再出現、未知 section、未知キー、未知 client 参照、重複する受信機、複数の `[group.*]` は設定エラーです。
+- EDCB では放送方式ごとに BonDriver を分けてください。現在の実装は 1 ファイル 1 group なので、同じバイナリを `BonDriver_PX4_T` / `BonDriver_PX4_S` などへコピーし、それぞれ別の INI を置きます。TVTest/tsdump は混在 group を使えます。
+- S1UD 2 台の例は、同じ runtime root に sianod を 2 instance 同時起動できることをまだ確認していません。
 
 ### チャンネル定義ファイル (TSV)
 

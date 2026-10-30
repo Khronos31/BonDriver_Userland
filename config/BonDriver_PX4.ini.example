@@ -23,6 +23,9 @@ runtime_dir = /run/px4-userland
 ; receivers = client:instance:receiver:systems
 ; systems is T, S or TS.  instance must be 1..64 ASCII [0-9A-Za-z_.-],
 ; start with a letter/digit, and should be lowercase for px4.
+; TVTest/tsdump may use a mixed T/S group.  EDCB should expose one system per
+; BonDriver: copy the binary to BonDriver_PX4_T / BonDriver_PX4_S, give each a
+; separate INI, and list only T or only S receivers in that group.
 [group.PX4]
 tuner_name = PX4
 channel_table = BonDriver_PX4.channels.tsv

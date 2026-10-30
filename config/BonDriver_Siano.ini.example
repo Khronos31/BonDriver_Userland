@@ -20,7 +20,8 @@ runtime_dir = /run/siano-userland
 
 ; Siano exposes receiver 0 only.  Use one instance per physical PX-S1UD;
 ; remove the second entry when only one unit is connected.  instance tokens are
-; chosen when sianod is started and must be lowercase.
+; chosen when sianod is started and must be lowercase.  Running two sianod
+; instances under one runtime root has not been verified in this project.
 [group.Siano]
 tuner_name = Siano
 channel_table = BonDriver_Siano.channels.tsv
