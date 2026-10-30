@@ -76,9 +76,10 @@ The deployment-target-11.0 build and independent ABI consumers were checked on
 macOS 26. Runtime behavior on macOS 11 itself has not been tested. The Linux
 static C++ runtime option does not apply to macOS.
 
-All configurations produce `BonDriver_Siano` and `BonDriver_PX4` shared
-libraries in the build tree. The supported output names are `.so` on Linux,
-`.dll` on Windows, and `.dylib` on macOS.
+All configurations produce `BonDriver_Userland` in the build tree. The
+supported output names are `.so` on Linux, `.dll` on Windows, and `.dylib` on
+macOS. Additional `BonDriver_Userland*` names are real copies of the same
+library; the module basename selects one `[group.NAME]` in the shared INI.
 
 ## GitHub Actions release pipeline
 
@@ -88,15 +89,15 @@ standard GitHub-hosted runners. Linux builds run inside digest-pinned glibc
 jobs use native ARM64 runners. Pull requests, pushes to `main`, and manual
 dispatches run the build, tests, release-build checks, and upload CI artifacts.
 
-Each platform job runs all 52 CTests with `BUILD_TESTING=ON`, then builds with
-`BUILD_TESTING=OFF`, places those release libraries into the consumer test
-directory, and runs the 44 applicable non-fault-injection tests against the
-release binaries. Linux jobs also check the ELF architecture, GLIBC 2.28
+Each platform job runs all 30 CTests with `BUILD_TESTING=ON`, then builds with
+`BUILD_TESTING=OFF`, places the release library into the consumer test
+directory, and runs the 26 applicable non-fault-injection tests against the
+release binary. Linux jobs also check the ELF architecture, GLIBC 2.28
 symbol-version ceiling (glibc jobs), absence of dynamic libstdc++/libgcc,
 and the exact factory/interface-RTTI export set. Windows checks x64 and the
 static-CRT import boundary; macOS checks arm64, a deployment target of 11.0,
-and system-only dynamic dependencies. Each archive contains both drivers,
-configuration examples, project license files, a `SHA256SUMS` file, and
+and system-only dynamic dependencies. Each archive contains the driver, the
+representative configuration example, project license files, a `SHA256SUMS` file, and
 `BUILD-INFO.txt` with the source revision and toolchain/runtime details.
 
 Only a pushed semantic version tag (`vMAJOR.MINOR.PATCH`, optionally with

@@ -19,6 +19,12 @@ target_link_libraries(test_process PRIVATE bondriver_common Threads::Threads)
 add_executable(test_driver test_driver.cpp)
 target_include_directories(test_driver PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
+add_executable(test_groups test_groups.cpp)
+target_include_directories(test_groups PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/abi_consumer)
+if(NOT WIN32)
+	target_link_libraries(test_groups PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+endif()
+
 if(MSVC AND BONDRIVER_STATIC_CRT)
 	set(_bondriver_test_static_crt "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	foreach(target IN ITEMS test_config test_buffer test_process)
@@ -34,12 +40,6 @@ add_executable(abi_consumer abi_consumer/consumer_main.cpp)
 target_include_directories(abi_consumer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/abi_consumer)
 if(NOT WIN32)
 	target_link_libraries(abi_consumer PRIVATE ${CMAKE_DL_LIBS})
-endif()
-
-add_executable(interop_consumer interop_consumer.cpp)
-target_include_directories(interop_consumer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/abi_consumer)
-if(NOT WIN32)
-	target_link_libraries(interop_consumer PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 add_test(NAME unit_buffer COMMAND test_buffer)
@@ -63,62 +63,51 @@ set(BONDRIVER_SCENARIOS
 	thread_start_failure
 	thread_start_cleanup_failure
 	cleanup_failure)
-set(BONDRIVER_BACKENDS "siano:BonDriver_Siano" "px4:BonDriver_PX4")
-foreach(pair ${BONDRIVER_BACKENDS})
-	string(REPLACE ":" ";" fields ${pair})
-	list(GET fields 0 backend)
-	list(GET fields 1 target)
-	foreach(scenario ${BONDRIVER_SCENARIOS})
-		add_test(NAME driver_${backend}_${scenario}
-			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> ${scenario})
-	endforeach()
+foreach(scenario ${BONDRIVER_SCENARIOS})
+	add_test(NAME driver_userland_${scenario}
+		COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> ${scenario})
 endforeach()
 
-# Canonical runtime-path alias contention is a PX4 identity concern only.
-add_test(NAME driver_px4_runtime_alias
-	COMMAND test_driver $<TARGET_FILE:BonDriver_PX4> px4 $<TARGET_FILE:fake_cli> runtime_alias)
+add_test(NAME driver_userland_runtime_alias
+	COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> runtime_alias)
 
 # Acceptance: real child process, exact argv, child failure, pool and
 # cross-process exclusivity.  The pool/exclusivity/daemon-control scenarios use
 # fork and are POSIX-only; Windows still builds the same test binary.
-foreach(pair ${BONDRIVER_BACKENDS})
-	string(REPLACE ":" ";" fields ${pair})
-	list(GET fields 0 backend)
-	list(GET fields 1 target)
-	add_test(NAME driver_${backend}_argv_contract_t
-		COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> argv_contract_t)
-	add_test(NAME driver_${backend}_child_failure
-		COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> child_failure)
-	if(NOT WIN32)
-		add_test(NAME driver_${backend}_pool_two_processes
-			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> pool_two_processes)
-		add_test(NAME driver_${backend}_pool_exhaust_release
-			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> pool_exhaust_release)
-		add_test(NAME driver_${backend}_physical_key_labels
-			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> physical_key_labels)
-		add_test(NAME driver_${backend}_no_daemon_control
-			COMMAND test_driver $<TARGET_FILE:${target}> ${backend} $<TARGET_FILE:fake_cli> no_daemon_control)
-	endif()
-endforeach()
-add_test(NAME driver_px4_argv_contract_s
-	COMMAND test_driver $<TARGET_FILE:BonDriver_PX4> px4 $<TARGET_FILE:fake_cli> argv_contract_s)
+add_test(NAME driver_userland_argv_contract_t
+	COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> argv_contract_t)
+add_test(NAME driver_userland_child_failure
+	COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> child_failure)
+add_test(NAME driver_userland_argv_contract_s
+	COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> argv_contract_s)
+if(NOT WIN32)
+	add_test(NAME driver_userland_pool_two_processes
+		COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> pool_two_processes)
+	add_test(NAME driver_userland_pool_exhaust_release
+		COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> pool_exhaust_release)
+	add_test(NAME driver_userland_physical_key_labels
+		COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> physical_key_labels)
+	add_test(NAME driver_userland_no_daemon_control
+		COMMAND test_driver $<TARGET_FILE:BonDriver_Userland> userland $<TARGET_FILE:fake_cli> no_daemon_control)
+endif()
+
+add_test(NAME group_select
+	COMMAND test_groups $<TARGET_FILE:BonDriver_Userland> $<TARGET_FILE:fake_cli>)
 
 add_test(NAME abi_consumer
-	COMMAND abi_consumer $<TARGET_FILE:fake_cli> $<TARGET_FILE:BonDriver_Siano> $<TARGET_FILE:BonDriver_PX4>)
-add_test(NAME interop_consumer
-	COMMAND interop_consumer $<TARGET_FILE:fake_cli> $<TARGET_FILE:BonDriver_Siano> $<TARGET_FILE:BonDriver_PX4>)
+	COMMAND abi_consumer $<TARGET_FILE:fake_cli> $<TARGET_FILE:BonDriver_Userland>)
 
 if(WIN32)
 	add_test(NAME windows_exports
 		COMMAND ${CMAKE_COMMAND}
-			-DLIBS=$<TARGET_FILE:BonDriver_Siano>|$<TARGET_FILE:BonDriver_PX4>
+			-DLIBS=$<TARGET_FILE:BonDriver_Userland>
 			-DSYS=Windows
 			-DLINKER=${CMAKE_LINKER}
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/check_exports.cmake)
 elseif(UNIX)
 	add_test(NAME shared_exports
 		COMMAND ${CMAKE_COMMAND}
-			-DLIBS=$<TARGET_FILE:BonDriver_Siano>|$<TARGET_FILE:BonDriver_PX4>
+			-DLIBS=$<TARGET_FILE:BonDriver_Userland>
 			-DSYS=${CMAKE_SYSTEM_NAME}
 			-DSTATIC_CXX=${BONDRIVER_STATIC_CXX_RUNTIME}
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/check_exports.cmake)

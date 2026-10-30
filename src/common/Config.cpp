@@ -10,6 +10,7 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <utility>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -567,48 +568,32 @@ bool parseReceiverEntry(const std::string &entry, ReceiverConfig &out, std::stri
 	return true;
 }
 
-bool loadGroup(const IniFile &ini, const std::string &dir, const std::vector<ClientConfig> &clients,
-               GroupConfig &out, std::string &error)
+bool loadGroupSection(const IniFile &ini, const std::string &section_name, const std::string &dir,
+                      const std::vector<ClientConfig> &clients, GroupConfig &out, std::string &error)
 {
-	const std::string *group_section = nullptr;
-	for (const auto &section : ini.sections) {
-		if (section.first.rfind("group.", 0) != 0) {
-			continue;
-		}
-		if (group_section != nullptr) {
-			error = "exactly one [group.NAME] is supported; found '" + *group_section + "' and '" + section.first + "'";
-			return false;
-		}
-		group_section = &section.first;
-	}
-	if (group_section == nullptr) {
-		error = "config requires exactly one [group.NAME] section";
-		return false;
-	}
-	const std::string &name = *group_section;
-	out.name = name.substr(6);
+	out.name = section_name.substr(6);
 	if (out.name.empty()) {
-		error = "empty group label in [" + name + "]";
+		error = "empty group label in [" + section_name + "]";
 		return false;
 	}
-	const auto &table = ini.sections.at(name);
-	if (!checkAllowedKeys(table, {"tuner_name", "channel_table", "receivers"}, name, error)) {
+	const auto &table = ini.sections.at(section_name);
+	if (!checkAllowedKeys(table, {"tuner_name", "channel_table", "receivers"}, section_name, error)) {
 		return false;
 	}
 	out.tuner_name = getOr(table, "tuner_name", "");
 	const std::string channel_table = getOr(table, "channel_table", "");
 	const std::string receivers = getOr(table, "receivers", "");
 	if (out.tuner_name.empty()) {
-		error = "config [" + name + "] requires tuner_name";
+		error = "config [" + section_name + "] requires tuner_name";
 		return false;
 	}
 	if (channel_table.empty()) {
-		error = "config [" + name + "] requires channel_table";
+		error = "config [" + section_name + "] requires channel_table";
 		return false;
 	}
 	out.channel_table = joinPath(dir, channel_table);
 	if (receivers.empty()) {
-		error = "config [" + name + "] requires receivers";
+		error = "config [" + section_name + "] requires receivers";
 		return false;
 	}
 	for (const std::string &entry : splitList(receivers, ';')) {
@@ -630,18 +615,77 @@ bool loadGroup(const IniFile &ini, const std::string &dir, const std::vector<Cli
 		out.receivers.push_back(receiver);
 	}
 	if (out.receivers.empty()) {
-		error = "config [" + name + "] receivers is empty";
+		error = "config [" + section_name + "] receivers is empty";
 		return false;
 	}
 	std::set<std::string> seen;
 	for (const ReceiverConfig &r : out.receivers) {
 		const std::string id = r.client + "/" + r.instance + "/" + std::to_string(r.receiver);
 		if (!seen.insert(id).second) {
-			error = "duplicate receiver '" + id + "' in [" + name + "]";
+			error = "duplicate receiver '" + id + "' in [" + section_name + "]";
 			return false;
 		}
 	}
 	return true;
+}
+
+bool loadGroups(const IniFile &ini, const std::string &dir, const std::vector<ClientConfig> &clients,
+                std::vector<GroupConfig> &out, std::string &error)
+{
+	for (const auto &section : ini.sections) {
+		if (section.first.rfind("group.", 0) != 0) {
+			continue;
+		}
+		GroupConfig group;
+		if (!loadGroupSection(ini, section.first, dir, clients, group, error)) {
+			return false;
+		}
+		out.push_back(std::move(group));
+	}
+	if (out.empty()) {
+		error = "config requires at least one [group.NAME] section";
+		return false;
+	}
+	return true;
+}
+
+bool selectGroup(const std::string &module_basename, const std::vector<GroupConfig> &groups, GroupConfig &out,
+                 std::string &error)
+{
+	std::string candidate = module_basename;
+	for (;;) {
+		for (const GroupConfig &group : groups) {
+			if (group.name == candidate) {
+				out = group;
+				return true;
+			}
+		}
+		const size_t underscore = candidate.find_last_of('_');
+		if (underscore == std::string::npos || underscore + 1 >= candidate.size()) {
+			break;
+		}
+		bool digits = true;
+		for (size_t i = underscore + 1; i < candidate.size(); ++i) {
+			if (candidate[i] < '0' || candidate[i] > '9') {
+				digits = false;
+				break;
+			}
+		}
+		if (!digits) {
+			break;
+		}
+		candidate.erase(underscore);
+	}
+
+	std::string available;
+	for (const GroupConfig &group : groups) {
+		if (!available.empty()) {
+			available += ", ";
+		}
+		available += group.name;
+	}
+	error = "no [group.NAME] matches module basename '" + module_basename + "' (available: " + available + ")";
+	return false;
 }
 
 bool validateGroup(const Config &config, std::string &error)
@@ -886,7 +930,10 @@ bool loadConfig(const std::string &module_path, const std::string &override_path
 	if (!loadClients(ini, module_dir, out.clients, error)) {
 		return false;
 	}
-	if (!loadGroup(ini, module_dir, out.clients, out.group, error)) {
+	if (!loadGroups(ini, module_dir, out.clients, out.groups, error)) {
+		return false;
+	}
+	if (!selectGroup(module_basename, out.groups, out.group, error)) {
 		return false;
 	}
 	if (!out.common.diagnostics.empty() && out.common.diagnostics.rfind("file:", 0) == 0) {
@@ -919,7 +966,7 @@ std::string resolveConfigPath(const std::string &module_path, std::string &modul
 	if (!override_env.empty()) {
 		return normalizePath(override_env);
 	}
-	return module_dir + "/" + module_basename + ".ini";
+	return module_dir + "/BonDriver_Userland.ini";
 }
 
 } // namespace bondriver

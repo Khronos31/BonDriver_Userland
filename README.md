@@ -1,20 +1,16 @@
 # BonDriver_Userland
 
-`BonDriver_Siano` および `BonDriver_PX4` は、[siano-userland](https://github.com/Khronos31/siano-userland) や [px4-userland](https://github.com/Khronos31/px4-userland) の CLI ツールをバックエンドとして起動し、標準出力から得られる MPEG-TS を EDCB や TVTest、LibISDB などの BonDriver 対応アプリケーションへ渡す共有ライブラリです。
+`BonDriver_Userland` は、Siano・PX4・ASICEN・PIX・torne の userland CLI（`*-ts`）をバックエンドとして起動し、標準出力から得られる MPEG-TS を EDCB や TVTest、LibISDB などの BonDriver 対応アプリケーションへ渡す共有ライブラリです。配布する本体は 1 種類で、必要なホストは同じバイナリを別名でコピーして使います。
 
-- **BonDriver_Siano**: Siano 系チューナーによる地上波受信に対応
-- **BonDriver_PX4**: PX4 系チューナーによる地上波および衛星（BS/CS）受信に対応
-
-バックエンドとして動作させるための各 userland CLI（`siano-ts` / `px4-ts`）、ファームウェア、daemon（`px4d`）の導入や設定手順は、それぞれのプロジェクトを参照してください。
+各 userland CLI、ファームウェア、daemon の導入や設定手順は、それぞれのプロジェクトを参照してください。
 
 ## 対応環境 / 必要なもの
 
 各環境向けに以下の共有ライブラリを提供します。
 
-| バックエンド | Linux x64 / arm64 | Windows x64 | macOS arm64 |
-| --- | --- | --- | --- |
-| Siano | `BonDriver_Siano.so` | `BonDriver_Siano.dll` | `BonDriver_Siano.dylib` |
-| PX4 | `BonDriver_PX4.so` | `BonDriver_PX4.dll` | `BonDriver_PX4.dylib` |
+| Linux x64 / arm64 | Windows x64 | macOS arm64 |
+| --- | --- | --- |
+| `BonDriver_Userland.so` | `BonDriver_Userland.dll` | `BonDriver_Userland.dylib` |
 
 ### 動作要件
 
@@ -23,13 +19,13 @@
 - **macOS (arm64)**: macOS 11 以降（ビルド最低対象。実際の動作確認は macOS 26 で実施）
 
 > [!NOTE]
-> Windows 版 PX4 は、将来 Windows 向けに同等オプションの `px4-ts` CLI が提供されることを見越した先行対応です。実機や各種再生・録画アプリケーションを用いた受入検証は未実施です。
+> 実機、EDCB/TVTest/tsdump への実組み込み、Windows/macOS/musl の実動作は未検証です。Linux x86_64 の fake/実CLI parse 検証のみ実施しています。
 
 ## 導入と最短設定
 
 ### バイナリの入手
 
-タグリリース時に、以下の 6 構成のアーカイブを [Releases](https://github.com/Khronos31/BonDriver_Userland/releases) で公開する予定です（現在はリリース未作成）。各アーカイブに両 BonDriver ライブラリ本体、設定例、チャンネル定義例、各種ドキュメントが含まれます。
+タグリリース時に、以下の 6 構成のアーカイブを [Releases](https://github.com/Khronos31/BonDriver_Userland/releases) で公開する予定です（現在はリリース未作成）。各アーカイブに `BonDriver_Userland` 本体、代表設定例、チャンネル定義例、各種ドキュメントが含まれます。
 
 - Linux glibc (x64 / arm64)
 - Linux musl (x64 / arm64)
@@ -42,7 +38,9 @@ EDCB や TVTest などのアプリケーションで利用する場合は、各�
 
 ### INI ファイルの配置
 
-ライブラリと同じディレクトリに、同一のベース名で拡張子を `.ini` にした設定ファイルを配置します（例: `BonDriver_Siano.so` には `BonDriver_Siano.ini`）。`config/*.example` をコピーして作成してください。現在の実装はモジュールごとに 1 つの `[group.NAME]` を読みます。
+ライブラリと同じディレクトリに `BonDriver_Userland.ini` を配置します。すべての `BonDriver_Userland*` コピーがこの 1 ファイルを参照します。`config/BonDriver_Userland.ini.example` をコピーして作成してください。
+
+モジュールの basename が `[group.NAME]` を選びます。`BonDriver_Userland.so` は `[group.BonDriver_Userland]`、`BonDriver_Userland_T.so` は `[group.BonDriver_Userland_T]` です。末尾の `_<数字>` は無視するため、`BonDriver_Userland_T_0.so` も `[group.BonDriver_Userland_T]` を使います。一致する group が無い場合は暗黙の既定へ落とさず、利用可能な group 名を添えて設定エラーになります。
 
 INI 内で指定する相対パスは、**INI ファイルが置かれたディレクトリを基準**に解決されます。単純なコマンド名を指定した場合でも PATH 検索は行われず INI からの相対パスとして解決されるため、CLI のパスは絶対パスで指定してください。
 
@@ -76,21 +74,26 @@ runtime_dir = /run/px4-userland
 
 #### `[group.NAME]`（ホストに見せる受信機）
 
-`tuner_name`、`channel_table`、`receivers` が必須です。`receivers` は `client:instance:receiver:systems` をセミコロンで区切ります。
+`tuner_name`、`channel_table`、`receivers` が必須です。`receivers` は `client:instance:receiver:systems` をセミコロンで区切ります。1 つの INI に複数の group と複数の client を書けます。
 
 ```ini
-[group.PX4]
-tuner_name = PX4
-channel_table = BonDriver_PX4.channels.tsv
-receivers = px4:tok:2:T; px4:tok:3:T; px4:tok:0:S; px4:tok:1:S
+[group.BonDriver_Userland_T]
+tuner_name = Userland-T
+channel_table = channels-ground.example.tsv
+receivers = px4:q3u4:2:T; px4:q3u4:3:T; siano:s1ud_a:0:T; torne:torne0:0:T
+
+[group.BonDriver_Userland_S]
+tuner_name = Userland-S
+channel_table = channels-satellite.example.tsv
+receivers = px4:q3u4:0:S; px4:q3u4:1:S
 ```
 
 - `systems` は `T`、`S`、`TS`。同じ放送方式を受信できる受信機だけを 1 つの group にまとめてください。EDCB では group 内の全 `Count` が同じチャンネル表を持つとみなされます。
 - `instance` は 1..64 ASCII bytes、先頭は英数字、以降は英数字/`_`/`.`/`-`、末尾 `.` 不可、予約名（`con`/`prn`/`aux`/`nul`/`com1..9`/`lpt1..9`）不可です。特定版の source では px4 と pix の product CLI が instance を小文字化し、asicen と torne は保持します。上流で修正中のため恒久契約とは扱わず、実 daemon での再現も未実施です。**例は小文字で統一しています。**
 - 同じ物理受信機は、runtime ディレクトリの実体パス、instance、receiver の組で排他します。client ラベルや group 名を変えても二重確保されません。別製品が同じ runtime root と同じ instance 名を使うと、別の受信機でも排他されるため、製品ごとに runtime_dir を分けてください。この排他は `lock_dir` が同じ場合に限ります。
-- 同名 section の再出現、未知 section、未知キー、未知 client 参照、重複する受信機、複数の `[group.*]` は設定エラーです。
-- EDCB では放送方式ごとに BonDriver を分けてください。現在の実装は 1 ファイル 1 group なので、同じバイナリを `BonDriver_PX4_T` / `BonDriver_PX4_S` などへコピーし、それぞれ別の INI を置きます。TVTest/tsdump は混在 group を使えます。
-- S1UD 2 台の例は、同じ runtime root に sianod を 2 instance 同時起動できることをまだ確認していません。
+- 同名 section の再出現、未知 section、未知キー、未知 client 参照、重複する受信機は設定エラーです。
+- EDCB では放送方式ごとに BonDriver を分けてください。同じバイナリを `BonDriver_Userland_T` / `_S` / `_TS` へコピーすれば、各コピーが同じ INI の対応 group を読みます。TVTest/tsdump は全受信機をまとめた `[group.BonDriver_Userland]` を使えます。
+- 代表例は T12 / S8 / TS3 = 23 受信機です（S1UD 2 台、Q3U4/M1UR/S1UR/W3U3/W3U2/DT181/DT295 各 1 台、torne CECH-ZD1J 1 台）。torne は `torne-ts` receiver 0 / ISDB-T のみの予定で、daemon listener と実受信はまだ成立していません。全 23 同時動作や S1UD 2 台同時は検証済みではありません。
 
 ### チャンネル定義ファイル (TSV)
 

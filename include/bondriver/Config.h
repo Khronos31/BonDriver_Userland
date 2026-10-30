@@ -1,9 +1,9 @@
 // Configuration and external channel-table model.
 //
-// A library reads an INI file whose name matches its own module basename
-// (BonDriver_Siano.ini / BonDriver_PX4.ini) from the directory containing the
-// shared library.  Relative paths inside the INI resolve against that
-// directory, never against the process cwd.
+// Every module copy reads BonDriver_Userland.ini from the directory containing
+// the shared library.  The module basename selects one [group.NAME] in that
+// shared file.  Relative paths inside the INI resolve against that directory,
+// never against the process cwd.
 #pragma once
 
 #include <cstdint>
@@ -48,7 +48,8 @@ struct ReceiverConfig {
 	bool hybrid = false;
 };
 
-// The tuner set exposed to the host.  Exactly one group is accepted for now.
+// The tuner set exposed to the host.  One group is selected from the INI by
+// the module basename.
 struct GroupConfig {
 	std::string name;
 	std::string tuner_name;
@@ -84,7 +85,8 @@ struct Config {
 	std::string config_path;
 	CommonConfig common;
 	std::vector<ClientConfig> clients;
-	GroupConfig group;
+	std::vector<GroupConfig> groups;
+	GroupConfig group; // selected by the module basename
 	std::vector<Space> spaces;
 
 	// Returns the client entry for a label, or nullptr.
@@ -106,7 +108,7 @@ std::string receiverLeaseKey(const std::string &canonical_runtime_dir, const std
 
 // Resolves the config file path:
 //   1. $BONDRIVER_CONFIG (test-only explicit override)
-//   2. <module_dir>/<module_basename>.ini
+//   2. <module_dir>/BonDriver_Userland.ini (shared by all module copies)
 std::string resolveConfigPath(const std::string &module_path, std::string &module_dir,
                               std::string &module_basename);
 

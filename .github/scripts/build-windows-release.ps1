@@ -45,7 +45,7 @@ function Assert-CtestCount([string]$BuildDir, [int]$Expected, [string]$Exclude =
 Invoke-Checked 'cmake' @('-S', $repo, '-B', $testBuild, '-DBUILD_TESTING=ON',
     '-DBONDRIVER_WERROR=ON', '-DBONDRIVER_STATIC_CRT=ON')
 Invoke-Checked 'cmake' @('--build', $testBuild, '--config', 'Release', '--parallel', '2')
-Assert-CtestCount $testBuild 44
+Assert-CtestCount $testBuild 30
 Invoke-Checked 'ctest' @('--test-dir', $testBuild, '-C', 'Release', '--output-on-failure')
 
 Invoke-Checked 'cmake' @('-S', $repo, '-B', $releaseBuild, '-DBUILD_TESTING=OFF',
@@ -54,7 +54,7 @@ Invoke-Checked 'cmake' @('--build', $releaseBuild, '--config', 'Release', '--par
 
 $releaseBin = Join-Path $releaseBuild 'Release'
 $testBin = Join-Path $testBuild 'Release'
-foreach ($name in @('BonDriver_Siano.dll', 'BonDriver_PX4.dll')) {
+foreach ($name in @('BonDriver_Userland.dll')) {
     $dll = Join-Path $releaseBin $name
     $headers = (& dumpbin /nologo /headers $dll | Out-String)
     if ($LASTEXITCODE -ne 0 -or $headers -notmatch '8664 machine \(x64\)') {
@@ -71,19 +71,18 @@ foreach ($name in @('BonDriver_Siano.dll', 'BonDriver_PX4.dll')) {
     Copy-Item -Force $dll (Join-Path $testBin $name)
 }
 
-$excluded = 'driver_(siano|px4)_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
-Assert-CtestCount $testBuild 36 $excluded
+$excluded = 'driver_userland_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
+Assert-CtestCount $testBuild 26 $excluded
 Invoke-Checked 'ctest' @('--test-dir', $testBuild, '-C', 'Release', '--output-on-failure', '-E', $excluded)
 
 $stage = Join-Path $repo '.ci-release-stage/windows-x64'
 $config = Join-Path $stage 'config'
 New-Item -ItemType Directory -Force -Path $config, (Join-Path $repo 'artifacts') | Out-Null
-Copy-Item -Force (Join-Path $releaseBin 'BonDriver_Siano.dll') $stage
-Copy-Item -Force (Join-Path $releaseBin 'BonDriver_PX4.dll') $stage
+Copy-Item -Force (Join-Path $releaseBin 'BonDriver_Userland.dll') $stage
 $assets = @(
-    'config/BonDriver_Siano.ini.example', 'config/BonDriver_PX4.ini.example',
+    'config/BonDriver_Userland.ini.example',
     'config/channels-ground.example.tsv', 'config/channels-satellite.example.tsv',
-    'config/channels-catv.example.tsv', 'README.md', 'docs/release-build.md', 'LICENSE', 'NOTICE'
+    'config/channels-catv.example.tsv', 'config/channels-all.example.tsv', 'README.md', 'docs/release-build.md', 'LICENSE', 'NOTICE'
 )
 foreach ($asset in $assets) {
     $source = Join-Path $repo $asset
@@ -104,7 +103,7 @@ $buildInfo = @(
 )
 Set-Content -Encoding ascii -Path (Join-Path $stage 'BUILD-INFO.txt') -Value $buildInfo
 $checksumLines = @()
-foreach ($asset in @('BonDriver_Siano.dll', 'BonDriver_PX4.dll', 'BUILD-INFO.txt') + $assets) {
+foreach ($asset in @('BonDriver_Userland.dll', 'BUILD-INFO.txt') + $assets) {
     $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $stage $asset)).Hash.ToLowerInvariant()
     $checksumLines += "$hash  $asset"
 }

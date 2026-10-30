@@ -33,8 +33,8 @@ cmake -S "$repo_root" -B "$test_dir" \
 	-DCMAKE_BUILD_TYPE=Release
 cmake --build "$test_dir" --parallel 2
 registered="$(ctest --test-dir "$test_dir" -N | awk '/Total Tests:/ { print $3 }')"
-if [[ "$registered" != 52 ]]; then
-	echo "expected 52 registered tests, found ${registered:-none}" >&2
+if [[ "$registered" != 30 ]]; then
+	echo "expected 30 registered tests, found ${registered:-none}" >&2
 	exit 1
 fi
 ctest --test-dir "$test_dir" --output-on-failure
@@ -47,7 +47,7 @@ cmake --build "$release_dir" --parallel 2
 
 machine_pattern='Advanced Micro Devices X86-64'
 if [[ "$arch" == arm64 ]]; then machine_pattern='AArch64'; fi
-for lib in BonDriver_Siano.so BonDriver_PX4.so; do
+for lib in BonDriver_Userland.so; do
 	path="$release_dir/$lib"
 	if ! readelf -h "$path" | grep -Eq "Machine:.*$machine_pattern"; then
 		echo "unexpected ELF architecture in $path" >&2
@@ -93,13 +93,12 @@ PY
 	fi
 done
 
-excluded='driver_(siano|px4)_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
+excluded='driver_userland_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
 registered="$(ctest --test-dir "$test_dir" -N --exclude-regex "$excluded" | awk '/Total Tests:/ { print $3 }')"
-if [[ "$registered" != 44 ]]; then
-	echo "expected 44 release-DSO tests, found ${registered:-none}" >&2
+if [[ "$registered" != 26 ]]; then
+	echo "expected 26 release-DSO tests, found ${registered:-none}" >&2
 	exit 1
 fi
-cp "$release_dir/BonDriver_Siano.so" "$test_dir/BonDriver_Siano.so"
-cp "$release_dir/BonDriver_PX4.so" "$test_dir/BonDriver_PX4.so"
+cp "$release_dir/BonDriver_Userland.so" "$test_dir/BonDriver_Userland.so"
 ctest --test-dir "$test_dir" --output-on-failure --exclude-regex "$excluded"
 bash "$repo_root/.github/scripts/package-release.sh" "linux-$libc-$arch" "$release_dir" tar.gz
