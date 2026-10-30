@@ -819,6 +819,9 @@ int scenarioThreadStartFailure(const Api &api)
 				child_exited = WaitForSingleObject(child, 10) == WAIT_OBJECT_0;
 			}
 			CloseHandle(child);
+		} else {
+			// The process object is already gone, so the child has exited.
+			child_exited = GetLastError() == ERROR_INVALID_PARAMETER;
 		}
 #else
 		const bool child_exited = child_pid > 0 && ::kill(static_cast<pid_t>(child_pid), 0) != 0 && errno == ESRCH;
@@ -884,6 +887,9 @@ int scenarioThreadStartCleanupFailure(const Api &api)
 				child_exited = WaitForSingleObject(child, 10) == WAIT_OBJECT_0;
 			}
 			CloseHandle(child);
+		} else {
+			// The process object is already gone, so the child has exited.
+			child_exited = GetLastError() == ERROR_INVALID_PARAMETER;
 		}
 #else
 		const bool child_exited = child_pid > 0 && ::kill(static_cast<pid_t>(child_pid), 0) != 0 && errno == ESRCH;
