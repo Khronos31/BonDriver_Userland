@@ -1,4 +1,4 @@
-# Terrestrial + BS/110-degree CS example.  ISDB-S uses exactly one of stream_id or slot.
+# 地上波 + BS/110度CS 設定例。ISDB-S では stream_id または slot のいずれか一方を指定する。
 space_id	space_name	channel_id	channel_name	system	frequency_hz	stream_id	slot
 GR	地上波	T13	T13	isdb-t	473142000	-	-
 GR	地上波	T14	T14	isdb-t	479142000	-	-

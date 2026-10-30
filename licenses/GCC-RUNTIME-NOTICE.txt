@@ -1,19 +1,17 @@
-GNU compiler runtimes
-=====================
+GNU コンパイラランタイムに関する通知
+====================================
 
-Linux binary packages include unmodified GNU libstdc++ and libgcc runtime
-code linked into the BonDriver shared libraries.
+Linux 向けバイナリパッケージには、BonDriver 共有ライブラリに静的リンクされた改変のない GNU libstdc++ および libgcc ランタイムコードが含まれている。
 
 Copyright (C) Free Software Foundation, Inc. and the respective contributors.
 
-These runtime components are licensed under the GNU General Public License,
-version 3 or later, with the GCC Runtime Library Exception, version 3.1.
-The complete texts are supplied as GPL-3.0.txt and GCC-RUNTIME-EXCEPTION.txt.
-The MIT License in the package applies to BonDriver_Userland's own code.
+これらのランタイムコンポーネントは、GCC Runtime Library Exception バージョン 3.1 が適用された GNU General Public License バージョン 3（またはそれ以降）のもとでライセンスされている。
+各条項の全文は GPL-3.0.txt および GCC-RUNTIME-EXCEPTION.txt として同梱されている。
+本パッケージに同梱される MIT License は、BonDriver_Userland 自身のコードに適用される。
 
-Upstream source and release archives:
+上流ソースコードおよびリリースアーカイブ:
 https://gcc.gnu.org/
 https://gcc.gnu.org/releases.html
 https://ftp.gnu.org/gnu/gcc/
 
-The package BUILD-INFO.txt records the compiler and libc used for the build.
+ビルドに使用されたコンパイラおよび libc の情報は、パッケージ内の BUILD-INFO.txt に記録されている。

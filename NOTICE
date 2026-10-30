@@ -1,60 +1,35 @@
-Provenance and licensing notice
+由来およびライセンスに関する通知
 ================================
 
-This repository (BonDriver_Userland) contains newly written C++17 source,
-build files and tests for shared libraries that drive the siano-userland and
-px4-userland command line tools. It does not bundle any third-party source
-files or headers. Compiler-runtime license texts are included under licenses/.
+本リポジトリ（BonDriver_Userland）には、各種 userland コマンドラインツール（`*-ts`）を駆動する共有ライブラリのための、新規に作成された C++17 ソースコード、ビルド設定ファイル、およびテストコードが含まれている。第三者のソースファイルやヘッダーファイルは同梱していない。コンパイラランタイムのライセンス本文は licenses/ 配下に収録している。
 
-ABI compatibility and adapters
-------------------------------
-The public interface and the EDCB structure layouts in
-include/bondriver/Abi.h exist so that existing BonDriver consumers (EDCB and
-LibISDB) can load these libraries. Vtable order and structure layout are
-functional compatibility requirements; equivalent declarations are also used
-independently by consumers. The C-structure adapter functions that fill and
-forward the structure slots are implemented in this project
-(src/common/DriverCore.cpp); the EDCB inline adapter bodies are not copied.
+ABI 互換性とアダプタ
+--------------------
+include/bondriver/Abi.h における公開インターフェースおよび EDCB 構造体レイアウトは、既存の BonDriver コンシューマ（EDCB や LibISDB など）から本ライブラリをロード可能にするために用意している。仮想関数テーブルの順序や構造体の配置は機能的な互換性要件であり、コンシューマ側でも独立して同等の宣言が使用されている。構造体スロットへの値設定および転送を担う C 構造体アダプタ関数は本プロジェクト内で実装しており（src/common/DriverCore.cpp）、EDCB のインラインアダプタ実装をコピーしたものではない。
 
-The optional test tests/edcb_compile_check.cpp compiles against an EDCB
-checkout supplied by the operator at configure time. EDCB and LibISDB are not
-redistributed here.
+オプショナルなテスト tests/edcb_compile_check.cpp は、CMake 設定時に利用者が指定した EDCB のチェックアウト環境を対象にコンパイルを行う。EDCB および LibISDB の再配布は本プロジェクトでは行っていない。
 
-Consulted references (read only)
---------------------------------
-- EDCB BonDriver interface declarations (BonCtrl/IBonDriver.h, IBonDriver2.h)
-  were inspected to validate the ABI: https://github.com/Khronos31/EDCB
-- LibISDB BonDriver interface declarations
-  (LibISDB/Windows/Base/BonDriver.hpp) were inspected to validate the ABI and
-  to confirm that consumers use the pointer form of GetTsStream.
-- BonDriver reference implementations in the Khronos31/hassio-addons EDCB
-  add-on (https://github.com/Khronos31/hassio-addons) and in
-  Khronos31/Pochitto (https://github.com/Khronos31/Pochitto) were consulted
-  for tuning and behavioral knowledge; their code is not included.
-- Child CLI contracts (option names, units, channel frequency formulas) are
-  taken from the siano-userland (https://github.com/Khronos31/siano-userland)
-  and px4-userland (https://github.com/Khronos31/px4-userland) documentation.
+参照資料（閲覧のみ）
+--------------------
+- EDCB の BonDriver インターフェース宣言（BonCtrl/IBonDriver.h、IBonDriver2.h）:
+  ABI 検証のために参照した（https://github.com/Khronos31/EDCB）。
+- LibISDB の BonDriver インターフェース宣言（LibISDB/Windows/Base/BonDriver.hpp）:
+  ABI 検証および GetTsStream のポインタ形式利用の確認のために参照した。
+- Khronos31/hassio-addons の EDCB アドオン（https://github.com/Khronos31/hassio-addons）および Khronos31/Pochitto（https://github.com/Khronos31/Pochitto）における BonDriver 実装例:
+  チューニングおよび動作仕様の把握のために参照した（コードの同梱は行っていない）。
+- 子プロセスの CLI 契約（オプション名、単位、周波数計算式など）:
+  siano-userland（https://github.com/Khronos31/siano-userland）および px4-userland（https://github.com/Khronos31/px4-userland）のドキュメントに基づいている。
 
-Names of third-party projects and their trademarks belong to their respective
-owners.
+第三者プロジェクトの名称および商標は、それぞれの権利者に帰属する。
 
-Project license
----------------
-BonDriver_Userland source, build files and tests are licensed under the MIT
-License. See LICENSE for the full terms.
+プロジェクトのライセンス
+------------------------
+BonDriver_Userland のソースコード、ビルド設定、およびテストコードは MIT License のもとで公開されている。ライセンス条項の詳細は LICENSE を参照すること。
 
-Compiler runtimes in release binaries
-------------------------------------
-Linux release libraries statically include GNU libstdc++ and libgcc runtime
-code, distributed under GPL version 3 or later with the GCC Runtime Library
-Exception version 3.1. Those components retain their own licenses and
-copyrights. Copies of the license, exception and runtime notice accompany
-the binaries under licenses/.
+リリースバイナリに含まれるコンパイラランタイム
+----------------------------------------------
+Linux 向けのリリースバイナリには、GNU libstdc++ および libgcc のランタイムコードが静的リンクされる場合がある。これらは GCC Runtime Library Exception バージョン 3.1 が適用された GPL バージョン 3（またはそれ以降）のもとで配布されるものであり、各コンポーネントのライセンスおよび著作権は各権利者に留保される。これらライセンス、例外条項、およびランタイム通知の写しは、バイナリパッケージ内の licenses/ 配下に同梱されている。
 
-The GCC exception permits independently written modules to use these runtimes
-under their own license. It does not change the MIT license of this project's
-code. See https://www.gnu.org/licenses/gcc-exception-3.1.html and
-https://www.gnu.org/licenses/gcc-exception-3.1-faq.html.
+GCC Runtime Library Exception により、独立して作成されたモジュールはこれらのランタイムを独自のライセンス下で利用することが認められている。この例外条項によって本プロジェクト自身のコードの MIT ライセンスが変更されることはない。詳細は https://www.gnu.org/licenses/gcc-exception-3.1.html および https://www.gnu.org/licenses/gcc-exception-3.1-faq.html を参照すること。
 
-Windows and macOS builds use their platform compiler/runtime distribution
-terms; the MIT grant covers this project's code.
+Windows および macOS のビルドは、各プラットフォームのコンパイラおよびランタイムの配布条件に従う。本プロジェクトのコードには MIT ライセンスが適用される。

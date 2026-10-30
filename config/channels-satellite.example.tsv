@@ -1,4 +1,4 @@
-# BS/110-degree CS example. ISDB-S uses exactly one of stream_id or slot.
+# BS/110度CS 設定例。ISDB-S では stream_id または slot のいずれか一方を指定する。
 space_id	space_name	channel_id	channel_name	system	frequency_hz	stream_id	slot
 BS	BS	BS01_0	BS01_0	isdb-s	1049480000	-	0
 BS	BS	BS03_0	BS03_0	isdb-s	1087840000	-	0

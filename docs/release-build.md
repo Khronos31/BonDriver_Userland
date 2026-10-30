@@ -1,16 +1,10 @@
-# Release builds
+# リリース向けビルド手順
 
-Build artifacts with `BUILD_TESTING=OFF`. The default release uses the compiler's
-standard C++ runtime linkage. Run CMake from a toolchain environment matching
-the intended target; choosing a newer compiler on a newer host does not, by
-itself, lower the libc ABI baseline.
+リリース用成果物をビルドする際は、`-DBUILD_TESTING=OFF` を指定する。既定ではコンパイラ標準の C++ ランタイムリンクを使用する。対象ターゲットに合致するツールチェーン環境から CMake を実行すること。新しいホスト上で新しいコンパイラを使用しても、それだけで libc の ABI 基準バージョンが下がるわけではない点に留意すること。
 
 ## Linux
 
-For glibc distributions at the supported minimum, use a compiler and sysroot
-based on glibc 2.28 or older, and verify the resulting dynamic symbol versions
-against that sysroot. For musl, use a musl-targeting compiler/sysroot based on
-musl 1.2.5. Build separately for x64 and arm64.
+サポート対象の下限とする glibc 環境向けには、glibc 2.28 以下の sysroot とコンパイラを使用し、生成された動的シンボルのバージョンがその範囲に収まっていることを確認すること。musl 向けには、musl 1.2.5 に基づくコンパイラおよび sysroot を使用する。x64 と arm64 はそれぞれ個別にビルドする。
 
 ```sh
 cmake -S . -B build-linux \
@@ -19,12 +13,9 @@ cmake -S . -B build-linux \
 cmake --build build-linux --parallel 2
 ```
 
-When using a cross compiler, pass its CMake toolchain file and the matching
-sysroot, for example `-DCMAKE_TOOLCHAIN_FILE=/path/to/toolchain.cmake`. Do not
-reuse a build directory between libc families or architectures.
+クロスコンパイラを使用する場合は、`-DCMAKE_TOOLCHAIN_FILE=/path/to/toolchain.cmake` のようにツールチェーンファイルと適切な sysroot を渡す。異なる libc ファミリ間やアーキテクチャ間でビルドディレクトリを再利用してはならない。
 
-An optional GNU-compatible static C++/unwind runtime is available for Linux
-ELF builds:
+Linux ELF ビルドでは、オプションとして GNU 互換の静的 C++ / unwind ランタイムリンクを利用できる。
 
 ```sh
 cmake -S . -B build-linux-static-cxx \
@@ -34,18 +25,11 @@ cmake -S . -B build-linux-static-cxx \
 cmake --build build-linux-static-cxx --parallel 2
 ```
 
-This option is supported with GNU or Clang Linux ELF toolchains. It statically
-links libstdc++ and libgcc/unwind support into each driver and applies the
-project export map so implementation/runtime symbols remain hidden while the
-BonDriver factories and interface RTTI remain available. libc and other system
-dependencies remain dynamic. Validate both DSOs in the target runtime and in
-both load orders before distribution; this option does not make a glibc build
-usable on musl or change the selected libc ABI baseline.
+このオプションは、GNU または Clang の Linux ELF ツールチェーンで利用できる。libstdc++ および libgcc / unwind のサポートコードをドライバ本体に静的リンクし、エクスポートマップを適用して内部実装シンボルを非公開としつつ、BonDriver のファクトリ関数およびインターフェース RTTI を外部へ公開する。libc などのシステム依存部分は動的リンクのまま保持される。このオプションは glibc 向けバイナリを musl 上で動作可能にするものではなく、libc の ABI 基準バージョンを変更するものでもない点に留意すること。
 
 ## Windows x64
 
-The default uses the toolchain's normal MSVC runtime. To build product DLLs
-with the static MSVC CRT, configure a separate release directory:
+既定ではツールチェーン標準の動的 MSVC ランタイムを使用する。静的 MSVC CRT（`/MT`）を用いて製品 DLL をビルドする場合は、専用のビルドディレクトリを用意して以下のようにビルドする。
 
 ```powershell
 cmake -S . -B build-windows-static-crt `
@@ -54,15 +38,11 @@ cmake -S . -B build-windows-static-crt `
 cmake --build build-windows-static-crt --config Release --parallel 2
 ```
 
-`BONDRIVER_STATIC_CRT` affects the two product DLLs. It is off by default and
-does not change a separately built consumer's runtime setting. Keep allocation
-and destruction of driver-owned objects inside the DLL through the factory and
-`Release()` interface.
+`BONDRIVER_STATIC_CRT` は `BonDriver_Userland.dll` に適用される。既定では OFF であり、個別にビルドされるコンシューマ側のランタイム設定には影響しない。ドライバが所有するオブジェクトの生成と破棄は、ファクトリ関数および `Release()` インターフェースを通じて必ず DLL 内部で完結させること。
 
 ## macOS arm64
 
-Build natively with the macOS SDK and AppleClang. Set the deployment target
-explicitly so the output does not inherit the build host's newer default:
+macOS SDK および AppleClang を使用してネイティブビルドする。ビルドホストの新しい既定バージョンを暗黙に継承しないよう、デプロイメントターゲットを明示的に指定すること。
 
 ```sh
 cmake -S . -B build-macos \
@@ -72,38 +52,14 @@ cmake -S . -B build-macos \
 cmake --build build-macos --parallel 2
 ```
 
-The deployment-target-11.0 build and independent ABI consumers were checked on
-macOS 26. Runtime behavior on macOS 11 itself has not been tested. The Linux
-static C++ runtime option does not apply to macOS.
+デプロイメントターゲット 11.0 でのビルドおよび独立した ABI コンシューマの動作は macOS 26 上で確認している（macOS 11 実機での動作検証は未実施）。なお、Linux 向けの静的 C++ ランタイムオプションは macOS には適用されない。
 
-All configurations produce `BonDriver_Userland` in the build tree. The
-supported output names are `.so` on Linux, `.dll` on Windows, and `.dylib` on
-macOS. Additional `BonDriver_Userland*` names are real copies of the same
-library; the module basename selects one `[group.NAME]` in the shared INI.
+いずれの構成でも、ビルドツリー内には `BonDriver_Userland` が生成される。出力ファイル名は Linux では `.so`、Windows では `.dll`、macOS では `.dylib` となる。追加の `BonDriver_Userland*` は同一ライブラリの実体コピーであり、モジュールの basename に応じて共通 INI 内の対応する `[group.NAME]` が選択される。
 
-## GitHub Actions release pipeline
+## GitHub Actions リリースパイプライン
 
-`.github/workflows/release.yml` builds the six supported configurations on
-standard GitHub-hosted runners. Linux builds run inside digest-pinned glibc
-2.28 or Alpine/musl 1.2.5 images after checkout on the host runner; the ARM64
-jobs use native ARM64 runners. Pull requests, pushes to `main`, and manual
-dispatches run the build, tests, release-build checks, and upload CI artifacts.
+`.github/workflows/release.yml` は、標準の GitHub ホステッドランナー上で対応 6 構成をビルドする。Linux ビルドは、ホストランナー上でチェックアウトした後にダイジェスト固定された glibc 2.28 または Alpine / musl 1.2.5 のコンテナイメージ内で実行される。ARM64 ジョブはネイティブの ARM64 ランナーを使用する。プルリクエスト、`main` へのプッシュ、および手動実行により、ビルド、テスト、リリース向け検査、および CI アーティファクトのアップロードが実行される。
 
-Each platform job runs all 30 CTests with `BUILD_TESTING=ON`, then builds with
-`BUILD_TESTING=OFF`, places the release library into the consumer test
-directory, and runs the 26 applicable non-fault-injection tests against the
-release binary. Linux jobs also check the ELF architecture, GLIBC 2.28
-symbol-version ceiling (glibc jobs), absence of dynamic libstdc++/libgcc,
-and the exact factory/interface-RTTI export set. Windows checks x64 and the
-static-CRT import boundary; macOS checks arm64, a deployment target of 11.0,
-and system-only dynamic dependencies. Each archive contains the driver, the
-representative configuration example, project license files, a `SHA256SUMS` file, and
-`BUILD-INFO.txt` with the source revision and toolchain/runtime details.
+各プラットフォームジョブは、まず `BUILD_TESTING=ON` で全 30 件の CTest を実行し、続いて `BUILD_TESTING=OFF` でビルドした製品バイナリをコンシューマテストディレクトリに配置して、耐障害性テスト（fault-injection）を除く 26 件のテストを実行する。Linux ジョブでは ELF アーキテクチャ、glibc ジョブにおける GLIBC 2.28 シンボルバージョン上限、動的 libstdc++ / libgcc の非依存性、および正確なファクトリ / インターフェース RTTI エクスポートセットを検証する。Windows では x64 および静的 CRT インポート境界を、macOS では arm64、デプロイメントターゲット 11.0、およびシステム動的依存のみであることをそれぞれ検証する。各アーカイブには、ドライバ本体、代表設定例、プロジェクトのライセンスファイル群、`SHA256SUMS`、およびコミットハッシュやツールチェーン情報を記載した `BUILD-INFO.txt` が同梱される。
 
-Only a pushed semantic version tag (`vMAJOR.MINOR.PATCH`, optionally with
-pre-release/build metadata) can publish a GitHub Release. The publish job waits
-for every matrix configuration, verifies the tag resolves to the checked-out
-commit, requires exactly six platform archives, writes an aggregate
-`SHA256SUMS`, creates a draft release, and publishes it. Existing releases are
-left untouched and cause the job to fail; rerunning a published tag does not
-replace its assets.
+セマンティックバージョニング形式のタグ（`vMAJOR.MINOR.PATCH`、プレリリースやビルドメタデータを含む形式も可）がプッシュされた場合にのみ、GitHub Release への公開処理が実行される。公開ジョブはマトリックスの全構成の完了を待ち、タグがチェックアウトコミットと一致することを確認したうえで、正確に 6 つのプラットフォームアーカイブを要求し、統合 `SHA256SUMS` を生成してドラフトリリースを作成・公開する。既存のリリースが存在する場合は上書きせずジョブは失敗するため、公開済みタグを再実行してもアセットが置き換わることはない。
