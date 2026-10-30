@@ -4,6 +4,8 @@
 ; Exactly one [group.NAME] is accepted per file.
 
 [common]
+; All BonDriver copies/INI that reference the same receiver must share this
+; directory.  A different lock_dir disables cross-INI pre-exclusion.
 lock_dir = /run/bondriver-userland
 tune_timeout_ms = 4000
 stop_timeout_ms = 5000
@@ -20,7 +22,8 @@ runtime_dir = /run/siano-userland
 
 ; Siano exposes receiver 0 only.  Use one instance per physical PX-S1UD;
 ; remove the second entry when only one unit is connected.  instance tokens are
-; chosen when sianod is started and must be lowercase.  Running two sianod
+; chosen when sianod is started.  The example uses lowercase; the current
+; sianod instance-spelling behavior was not re-verified.  Running two sianod
 ; instances under one runtime root has not been verified in this project.
 [group.Siano]
 tuner_name = Siano

@@ -4,6 +4,8 @@
 ; Exactly one [group.NAME] is accepted per file.
 
 [common]
+; All BonDriver copies/INI that reference the same receiver must share this
+; directory.  A different lock_dir disables cross-INI pre-exclusion.
 lock_dir = /run/bondriver-userland
 tune_timeout_ms = 10000
 stop_timeout_ms = 5000
