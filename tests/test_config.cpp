@@ -16,22 +16,26 @@ std::string path(const std::string &name)
 	return g_root + "/" + name;
 }
 
-std::string writeAndLoad(const std::string &ini, const std::string &module_basename)
+std::string writeAndLoadTable(const std::string &ini, const std::string &table, const std::string &module_basename)
 {
 	testutil::writeFile(path("case.ini"), ini);
-	testutil::writeFile(path("t.tsv"),
-	                    "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
-	                    "GR\tGR\tT13\tT13\tisdb-t\t473142857\t-\t-\n");
+	testutil::writeFile(path("t.tsv"), table);
 	testutil::writeFile(path("s.tsv"),
 	                    "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
 	                    "BS\tBS\tBS01_0\tBS01_0\tisdb-s\t1100000000\t1\t-\n");
 	Config config;
 	std::string error;
 	const bool ok = loadConfig(path(module_basename + ".so"), path("case.ini"), config, error);
-	if (!ok) {
-		return error;
-	}
-	return std::string();
+	return ok ? std::string() : error;
+}
+
+std::string writeAndLoad(const std::string &ini, const std::string &module_basename)
+{
+	return writeAndLoadTable(
+	    ini,
+	    "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
+	    "GR\tGR\tT13\tT13\tisdb-t\t473142857\t-\t-\n",
+	    module_basename);
 }
 
 const char *kIni = R"INI([common]
@@ -214,6 +218,54 @@ int main()
 	{
 		const std::string err = writeAndLoad(iniWithReceivers("px4:" + std::string(65, 'a') + ":0:T"), "BonDriver_Userland_T");
 		testutil::expect(err.find("invalid instance") != std::string::npos, "65-byte instance rejected: " + err);
+	}
+	{
+		const std::string err = writeAndLoadTable(
+		    kIni,
+		    "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
+		    "GR\tGR\tT13\tT13\tisdb-t\t473142857\t-\t-\n"
+		    "GR\tGR\tT13\tT13\tisdb-t\t479142857\t-\t-\n",
+		    "BonDriver_Userland_T");
+		testutil::expect(err.find("duplicate channel id") != std::string::npos,
+		                 "duplicate channel id rejected: " + err);
+	}
+	{
+		const std::string err = writeAndLoadTable(
+		    kIni,
+		    "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
+		    "GR\tGR\tT13\tT13\tisdb-x\t473142857\t-\t-\n",
+		    "BonDriver_Userland_T");
+		testutil::expect(err.find("unknown system") != std::string::npos, "unknown system rejected: " + err);
+	}
+	{
+		const std::string err = writeAndLoadTable(
+		    kIni,
+		    "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
+		    "GR\tGR\tT13\tT13\tisdb-t\t473142\t-\t-\n",
+		    "BonDriver_Userland_T");
+		testutil::expect(err.find("units must be Hz") != std::string::npos,
+		                 "kHz unit in a T table rejected: " + err);
+	}
+	{
+		const std::string err = writeAndLoadTable(
+		    kIni,
+		    "space_id\tspace_name\tchannel_id\tchannel_name\tsystem\tfrequency_hz\tstream_id\tslot\n"
+		    "GR\tGR\tT13\tT13\tisdb-t\t473142857\t1\t-\n",
+		    "BonDriver_Userland_T");
+		testutil::expect(err.find("isdb-t must not set stream_id") != std::string::npos,
+		                 "isdb-t table with stream_id rejected: " + err);
+	}
+	{
+		// An S-only group must not expose a T table.
+		std::string ini = kIni;
+		const std::string s_marker = "[group.BonDriver_Userland_S]\ntuner_name = Satellite Tuner\nchannel_table = s.tsv";
+		const size_t at = ini.find(s_marker);
+		if (at != std::string::npos) {
+			ini.replace(at, s_marker.size(),
+			            "[group.BonDriver_Userland_S]\ntuner_name = S\nchannel_table = t.tsv");
+		}
+		const std::string err = writeAndLoad(ini, "BonDriver_Userland_S");
+		testutil::expect(err.find("isdb-t") != std::string::npos, "S-only group rejects a T table: " + err);
 	}
 	{
 		// A T-only group must not expose an S table.

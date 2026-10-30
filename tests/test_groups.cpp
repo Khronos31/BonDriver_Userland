@@ -171,8 +171,8 @@ int main(int argc, char **argv)
 	    "receivers = main:s0:0:S\n"
 	    "[group.BonDriver_Userland_TS]\ntuner_name = TS\nchannel_table = all.tsv\n"
 	    "receivers = main:h0:0:TS; main:h1:1:TS\n"
-	    "[group.BonDriver_Userland]\ntuner_name = All\nchannel_table = all.tsv\n"
-	    "receivers = main:u0:0:TS\n");
+	    "[group.BonDriver_Userland]\ntuner_name = All\nchannel_table = t.tsv\n"
+	    "receivers = main:t0:0:T\n");
 
 	const std::filesystem::path source = argv[1];
 	const std::string extension = source.extension().string();
@@ -209,6 +209,29 @@ int main(int argc, char **argv)
 	}
 	if (td != nullptr) td->Release();
 	if (sd != nullptr) sd->Release();
+
+	// Different groups/module copies that name the same physical receiver must
+	// still be mutually exclusive.  The lease key is independent of the group.
+	const std::filesystem::path all_lib = copy("BonDriver_Userland");
+	Api t_copy = loadApi(root / ("BonDriver_Userland_T" + extension));
+	Api all_copy = loadApi(all_lib);
+	if (t_copy.createDriver != nullptr && all_copy.createDriver != nullptr) {
+		IBonDriver2 *first = t_copy.createDriver();
+		IBonDriver2 *second = all_copy.createDriver();
+		expect(first != nullptr && second != nullptr, "cross-group drivers created");
+		if (first != nullptr && second != nullptr) {
+			expect(first->OpenTuner() == TRUE, "T group acquires the shared receiver");
+			expect(second->OpenTuner() == FALSE,
+			       "another group cannot acquire the same physical receiver");
+			first->CloseTuner();
+			expect(second->OpenTuner() == TRUE, "closing the T group releases the shared receiver");
+			second->CloseTuner();
+		}
+		if (first != nullptr) first->Release();
+		if (second != nullptr) second->Release();
+	} else {
+		expect(false, "cross-group drivers could not be loaded");
+	}
 
 	// The EDCB STRUCT_IBONDRIVER2 entry must expose the same selected group.
 	Api ts = loadApi(root / ("BonDriver_Userland_TS" + extension));
