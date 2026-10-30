@@ -90,7 +90,7 @@ dispatches run the build, tests, release-build checks, and upload CI artifacts.
 
 Each platform job runs all 52 CTests with `BUILD_TESTING=ON`, then builds with
 `BUILD_TESTING=OFF`, places those release libraries into the consumer test
-directory, and runs the 48 applicable non-fault-injection tests against the
+directory, and runs the 44 applicable non-fault-injection tests against the
 release binaries. Linux jobs also check the ELF architecture, GLIBC 2.28
 symbol-version ceiling (glibc jobs), absence of dynamic libstdc++/libgcc,
 and the exact factory/interface-RTTI export set. Windows checks x64 and the

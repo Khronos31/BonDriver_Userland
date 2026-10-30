@@ -72,7 +72,7 @@ foreach ($name in @('BonDriver_Siano.dll', 'BonDriver_PX4.dll')) {
 }
 
 $excluded = 'driver_(siano|px4)_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
-Assert-CtestCount $testBuild 48 $excluded
+Assert-CtestCount $testBuild 44 $excluded
 Invoke-Checked 'ctest' @('--test-dir', $testBuild, '-C', 'Release', '--output-on-failure', '-E', $excluded)
 
 $stage = Join-Path $repo '.ci-release-stage/windows-x64'

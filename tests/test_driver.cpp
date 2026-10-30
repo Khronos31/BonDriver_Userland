@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cerrno>
 #include <cstdio>
+#include <filesystem>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -918,6 +919,13 @@ std::vector<std::string> readArgv(const std::string &path)
 	return out;
 }
 
+std::string canonicalPath(const std::string &path)
+{
+	std::error_code ec;
+	const std::filesystem::path canonical = std::filesystem::canonical(std::filesystem::u8path(path), ec);
+	return ec ? path : canonical.string();
+}
+
 bool samePath(const std::string &a, const std::string &b)
 {
 	std::string left = a;
@@ -978,7 +986,7 @@ int scenarioArgvContract(const Api &api, bool satellite)
 	expected.push_back("--freq");
 	expected.push_back(satellite ? "1100000000" : "473142857");
 	expected.push_back("--runtime-dir");
-	expected.push_back(g_root + "/runtime");
+	expected.push_back(canonicalPath(g_root + "/runtime"));
 	expected.push_back("--output");
 	expected.push_back("-");
 	if (satellite) {

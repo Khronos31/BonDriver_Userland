@@ -80,7 +80,11 @@ inline std::string tempRoot()
 		base = "/tmp";
 	}
 #endif
-	return std::string(base) + "/bondriver-test";
+	std::string root = base;
+	while (!root.empty() && (root.back() == '/' || root.back() == '\\')) {
+		root.pop_back();
+	}
+	return root + "/bondriver-test";
 }
 
 } // namespace testutil

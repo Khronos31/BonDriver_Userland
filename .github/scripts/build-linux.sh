@@ -95,8 +95,8 @@ done
 
 excluded='driver_(siano|px4)_(factory_failure|thread_start_failure|thread_start_cleanup_failure|cleanup_failure)'
 registered="$(ctest --test-dir "$test_dir" -N --exclude-regex "$excluded" | awk '/Total Tests:/ { print $3 }')"
-if [[ "$registered" != 48 ]]; then
-	echo "expected 48 release-DSO tests, found ${registered:-none}" >&2
+if [[ "$registered" != 44 ]]; then
+	echo "expected 44 release-DSO tests, found ${registered:-none}" >&2
 	exit 1
 fi
 cp "$release_dir/BonDriver_Siano.so" "$test_dir/BonDriver_Siano.so"
