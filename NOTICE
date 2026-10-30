@@ -18,7 +18,7 @@ include/bondriver/Abi.h における公開インターフェースおよび EDCB
 - Khronos31/hassio-addons の EDCB アドオン（https://github.com/Khronos31/hassio-addons）および Khronos31/Pochitto（https://github.com/Khronos31/Pochitto）における BonDriver 実装例:
   チューニングおよび動作仕様の把握のために参照した（コードの同梱は行っていない）。
 - 子プロセスの CLI 契約（オプション名、単位、周波数計算式など）:
-  各 userland プロジェクトのドキュメントおよび仕様に基づいている。
+  siano-userland（https://github.com/Khronos31/siano-userland）および px4-userland（https://github.com/Khronos31/px4-userland）のドキュメントに基づいている。
 
 第三者プロジェクトの名称および商標は、それぞれの権利者に帰属する。
 
